@@ -56,14 +56,16 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 ## 🧰 Features
 
 - ✅ **Unified Web Dashboard** — Control every device from one browser tab
-- ✅ **Automated Recon** — One-click nmap, masscan, Pineapple scanning
+- ✅ **Device Status Indicators** — Live ping dots show which devices are reachable
+- ✅ **Process Management** — Start and stop Pi-local services (Responder, Bettercap, crack) from the dashboard
+- ✅ **Automated Recon** — One-click nmap with configurable target subnet
 - ✅ **Credential Harvesting** — Built-in Responder, browser cred exfil, WiFi profile theft
 - ✅ **MITM Suite** — Bettercap, ARP spoofing, DNS spoofing, transparent proxying
 - ✅ **HID Attack Delivery** — Pre-built DuckyScript payloads for OMG Plug
 - ✅ **Persistent C2** — Auto-SSH reverse tunnels via LAN Turtle
-- ✅ **Loot Management** — Centralized storage, auto-pull from all devices
+- ✅ **Loot Management** — Centralized storage, auto-pull from all devices via SFTP
 - ✅ **OPSEC Hardening** — MAC randomization, Tor routing, encrypted loot at rest
-- ✅ **"Engage" Button** — Single script launches a full assessment
+- ✅ **"Engage" Button** — Single script launches a full assessment with graceful shutdown on Ctrl+C
 
 ---
 
@@ -107,7 +109,14 @@ sudo ./setup/hexbox_setup.sh
 
 The setup script installs the entire offensive toolchain: nmap, aircrack-ng, Responder, Bettercap, Metasploit, hashcat, and all Python dependencies.
 
-### 3. Reboot
+### 3. Configure
+```bash
+bash setup/configure.sh
+```
+
+This interactive script prompts for your attacker IP and device credentials **once**, writes `config.json`, and automatically propagates your IP into every payload file — no manual editing of multiple files required.
+
+### 4. Reboot
 ```bash
 sudo reboot
 ```
@@ -116,71 +125,73 @@ sudo reboot
 
 ## ⚙️ Configuration — **READ THIS BEFORE DEPLOYING**
 
-> 🚨 **HexBox will NOT work out of the box.** Every environment is different, and you **must** customize several files to match your network topology, device IPs, and target environment.
+> 🚨 **HexBox will NOT work out of the box.** Every environment is different, and you **must** customize it to match your network topology, device IPs, and target environment.
 
-### Required Configuration Steps
+### One-Command Setup (Recommended)
 
-#### 🔧 1. Device IP Addresses
-The default IPs in `c2/hexbox_c2.py` are based on each Hak5 device's **factory default management subnet**. If you've changed any device's IP (which you should for OPSEC), or if you're routing them through a switch on a different subnet, **update the `DEVICES` dictionary**:
+```bash
+bash setup/configure.sh
+```
 
-```python
-DEVICES = {
-    "pineapple":      {"ip": "172.16.42.1",  "user": "root", "pass": "hak5pineapple"},
-    "sharkjack":      {"ip": "172.16.24.1",  "user": "root", "pass": "hak5shark"},
-    "packetsquirrel": {"ip": "172.16.32.1",  "user": "root", "pass": "hak5squirrel"},
-    "lanturtle":      {"ip": "172.16.84.1",  "user": "root", "pass": "hak5turtle"},
-    "omgplug":        {"ip": "192.168.1.50", "user": "root", "pass": "hak5omg"},
+Prompts you for:
+- Your HexBox / attacker IP (replaces `10.0.0.99` in all payload files automatically)
+- Default target scan subnet
+- External C2 server IP
+- Passwords for each Hak5 device
+
+Writes everything to **`config.json`** — the single source of truth loaded by all Python scripts.
+
+### Manual Configuration
+
+Edit **`config.json`** in the repo root:
+
+```json
+{
+  "hexbox": {
+    "ip": "10.0.0.99",
+    "scan_target": "192.168.1.0/24"
+  },
+  "devices": {
+    "pineapple":      {"ip": "172.16.42.1",  "pass": "hak5pineapple"},
+    "sharkjack":      {"ip": "172.16.24.1",  "pass": "hak5shark"},
+    "packetsquirrel": {"ip": "172.16.32.1",  "pass": "hak5squirrel"},
+    "lanturtle":      {"ip": "172.16.84.1",  "pass": "hak5turtle"},
+    "omgplug":        {"ip": "192.168.1.50", "pass": "hak5omg"}
+  },
+  "c2": {
+    "external_ip": "YOUR.C2.IP.HERE"
+  }
 }
 ```
 
-#### 🔑 2. Credentials
-**Change every password.** The defaults above are placeholders — your real Hak5 devices use whatever you set during their initial provisioning. If you reused factory defaults, change them now and update this dictionary.
+`hexbox_c2.py`, `catcher.py`, and `pineapple_auto.py` all load from this file. After editing, propagate the IP to payload files:
 
-#### 🎯 3. Callback / C2 IP
-Multiple payloads reference a hardcoded callback IP (`10.0.0.99` by default). This needs to be **your HexBox's IP on the target network** (or your public C2 IP for off-site work). Update these files:
-
-| File | What to change |
-|------|----------------|
-| `payloads/reverse_shell.ducky` | Replace `10.0.0.99` with your listener IP |
-| `payloads/browser_exfil.ducky` | Update the `iwr` URL |
-| `payloads/chrome.ps1` | Update the `Invoke-WebRequest` target |
-| `payloads/wifi_steal.ducky` | Update the POST URL |
-| `payloads/squirrel_mitm.sh` | Update the DNS spoof target IP (`10.10.10.10`) |
-
-A handy one-liner to find & replace globally:
 ```bash
 grep -rl "10.0.0.99" ~/hexbox/payloads/ | xargs sed -i 's/10.0.0.99/YOUR.IP.HERE/g'
 ```
 
-#### 🌐 4. Target Network Range
-The `scripts/engage.sh` master script defaults to scanning `192.168.1.0/24`. Either:
-- Pass the target subnet as an argument: `./engage.sh 10.10.0.0/16`
-- Or edit the default in the script
+### Additional Required Steps
 
-#### 🐢 5. LAN Turtle AutoSSH
-For the reverse tunnel back to your HexBox to work, you need:
-- A **public IP or VPS** that the LAN Turtle can phone home to
+#### 🐢 LAN Turtle AutoSSH
+For the reverse tunnel to work:
+- A **public IP or VPS** the LAN Turtle can phone home to
 - A `tunnel` user on that host with key-based SSH auth
-- Edit `SERVER=<YOUR_HEXBOX_PUBLIC_IP>` in the Turtle setup block
+- Edit `SERVER=<YOUR_HEXBOX_PUBLIC_IP>` in `payloads/turtle_foothold.sh`
 
-#### 📡 6. WiFi Interface Names
-The default config assumes `wlan0` (Pi's built-in) and `wlan1mon` (Pineapple). If you're using external adapters (Alfa AWUS036ACH, etc.), update interface references in:
+#### 📡 WiFi Interface Names
+Defaults assume `wlan0` (Pi built-in) and `wlan1mon` (Pineapple). If using external adapters, update interface references in:
 - `c2/hexbox_c2.py` (Bettercap, Responder routes)
 - `scripts/opsec.sh` (MAC rotation loop)
 
-#### 🍍 7. Pineapple API Token
-The `scripts/pineapple_auto.py` script logs into the Pineapple's API. If you've changed the root password from the default, update the `USER` / `PASS` constants at the top of that file.
-
-#### 📁 8. Loot Path (Optional)
-Loot defaults to `~/hexbox/loot/`. If you've added an external SSD, symlink it:
+#### 📁 External SSD for Loot (Optional)
 ```bash
 sudo mount /dev/sda1 /mnt/ssd
 rm -rf ~/hexbox/loot
 ln -s /mnt/ssd/loot ~/hexbox/loot
 ```
 
-#### 🔒 9. Dashboard Authentication (Strongly Recommended)
-The Flask C2 dashboard ships **without authentication** for rapid lab use. Before deploying in any real environment, add Flask-Login or HTTP Basic Auth at minimum. Anyone on the management network can currently fire payloads.
+#### 🔒 Dashboard Authentication (Strongly Recommended)
+The Flask C2 dashboard ships **without authentication** for rapid lab use. Before deploying in any real environment, add Flask-Login or HTTP Basic Auth. Anyone on the management network can currently fire payloads.
 
 ---
 
@@ -189,15 +200,16 @@ The Flask C2 dashboard ships **without authentication** for rapid lab use. Befor
 Run the included pre-flight check before going on-site:
 
 ```bash
-python3 scripts/preflight.py
+sudo python3 scripts/preflight.py
 ```
 
 This will:
-- Ping every configured Hak5 device
-- Test SSH credentials
-- Verify payload callback IPs resolve
+- Ping every configured Hak5 device and test SSH credentials
+- Verify Python packages and required tools are installed
 - Confirm required services are running
-- Validate loot directory is writable
+- Validate loot directory structure is correct
+- Check OPSEC posture (MAC randomization, hostname, firewall)
+- Output a GO / NO-GO decision with a JSON report
 
 ---
 
@@ -209,16 +221,28 @@ sudo python3 ~/hexbox/c2/hexbox_c2.py
 ```
 Browse to `http://<pi-ip>:1337`
 
+The dashboard shows:
+- **Status dots** next to each device — click "Ping Devices" to check reachability
+- **Editable target network** field passed to all scan operations
+- **Background Processes** panel listing running PIDs with inline kill buttons
+- **Stop buttons** next to Responder, Bettercap, and Crack for clean shutdown
+
 ### One-Shot Engagement Mode
 ```bash
-sudo ~/hexbox/scripts/engage.sh 10.10.0.0/24
+sudo bash ~/hexbox/scripts/engage.sh 10.10.0.0/24
 ```
-This fires up everything — Pineapple, Responder, catchers, dashboard, listeners — in one shot.
+Fires up everything — Pineapple, Responder, credential catcher, dashboard, reverse shell listeners — in one shot. Press **Ctrl+C** to cleanly stop all services.
 
 ### Deploy a Hak5 Payload
 1. Plug device into target environment
 2. Hit the corresponding button in the dashboard
 3. Watch loot stream into `~/hexbox/loot/`
+
+### OPSEC Hardening (Run Before Going On-Site)
+```bash
+bash ~/hexbox/scripts/opsec.sh
+```
+Rotates MACs, spoofs hostname, suppresses bash history, and encrypts existing loot with GPG AES-256.
 
 ---
 
@@ -226,29 +250,39 @@ This fires up everything — Pineapple, Responder, catchers, dashboard, listener
 
 ```
 hexbox/
+├── config.json                      # ← Edit this: all IPs and credentials
+├── requirements.txt                 # Python dependencies
 ├── setup/
-│   └── hexbox_setup.sh          # Base provisioning
+│   ├── hexbox_setup.sh              # Base provisioning (run once on fresh Pi)
+│   ├── configure.sh                 # Interactive one-time configuration
+│   └── install_dependancies.sh      # Install Python deps from requirements.txt
 ├── c2/
-│   ├── hexbox_c2.py             # Main Flask dashboard
-│   └── catcher.py               # Exfil endpoint
+│   ├── hexbox_c2.py                 # Main Flask dashboard
+│   └── catcher.py                   # Chrome DB + WiFi profile exfil receiver
 ├── payloads/
-│   ├── reverse_shell.ducky      # OMG: Win reverse shell
-│   ├── browser_exfil.ducky      # OMG: Chrome cred theft
-│   ├── wifi_steal.ducky         # OMG: WiFi profile dump
-│   ├── chrome.ps1               # PowerShell stager
-│   ├── sharkjack_recon.sh       # Shark Jack auto-recon
-│   └── squirrel_mitm.sh         # Packet Squirrel MITM
+│   ├── reverse_shell.ducky          # OMG: Windows reverse shell
+│   ├── browser_exfil.ducky          # OMG: Chrome credential theft
+│   ├── wifi_steal.ducky             # OMG: WiFi profile dump
+│   ├── chrome.ps1                   # PowerShell DPAPI exfil stager
+│   ├── sharkjack_recon.sh           # Shark Jack auto-recon
+│   ├── squirrel_mitm.sh             # Packet Squirrel transparent MITM
+│   ├── turtle_foothold.sh           # LAN Turtle module provisioning
+│   └── turtle_receiver.sh           # C2-side tunnel receiver setup
 ├── scripts/
-│   ├── engage.sh                # Master launch script
-│   ├── opsec.sh                 # Hardening / MAC rotation
-│   ├── pineapple_auto.py        # Pineapple API automation
-│   └── preflight.py             # Pre-deployment validation
-├── loot/                        # Captured data lands here
+│   ├── engage.sh                    # Master launch + graceful shutdown
+│   ├── opsec.sh                     # MAC rotation, GPG loot encryption
+│   ├── pineapple_auto.py            # Pineapple REST API automation
+│   └── preflight.py                 # Pre-deployment validation
+├── loot/                            # Captured data lands here
 │   ├── pcaps/
 │   ├── handshakes/
 │   ├── creds/
-│   └── screenshots/
-└── logs/                        # Operational logs
+│   ├── screenshots/
+│   ├── nmap/
+│   ├── hashes/
+│   ├── exfil/
+│   └── shark/
+└── logs/                            # Operational logs (c2.log, responder.log, etc.)
 ```
 
 ---
@@ -260,6 +294,7 @@ hexbox/
 - The C2 dashboard binds to `0.0.0.0:1337` — firewall it to your management interface only
 - Consider routing Pi callbacks through Tor or a VPN for off-site C2
 - DuckyScript payloads are **plaintext on the OMG Plug** — assume they can be recovered if the device is captured
+- `config.json` contains device passwords — do not commit it with real credentials to a public repo
 
 ---
 
