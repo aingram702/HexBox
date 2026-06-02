@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # ~/hexbox/c2/hexbox_c2.py
 
-from flask import Flask, render_template_string, request, jsonify, send_file
+from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect, url_for, abort
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import subprocess, paramiko, requests as _req, json, os, signal, threading, shlex, socket
+import subprocess, paramiko, requests as _req, json, os, signal, threading, shlex, socket, re, secrets, ipaddress
 from datetime import datetime
 from pathlib import Path
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB upload cap
 
 # ---------------------------------------------------------------------------
 # Config
@@ -41,6 +42,26 @@ IFACE_BETTERCAP = _IF.get("bettercap", "wlan0")
 
 LOOT.mkdir(parents=True, exist_ok=True)
 LOGS.mkdir(parents=True, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Auth — token loaded from HEXBOX_TOKEN env var or config.json hexbox.api_token
+# ---------------------------------------------------------------------------
+
+_TOKEN = os.environ.get("HEXBOX_TOKEN") or _HB.get("api_token") or secrets.token_hex(16)
+app.secret_key = secrets.token_hex(32)
+
+_VALID_PROCS = {"scan", "responder", "bettercap", "crack"}
+
+
+@app.before_request
+def _require_auth():
+    if request.endpoint in ("login", "logout", "static"):
+        return None
+    if session.get("authed") or request.headers.get("X-HexBox-Token") == _TOKEN:
+        return None
+    if request.is_json or request.headers.get("X-HexBox-Token") is not None:
+        return jsonify(error="Unauthorized"), 403
+    return redirect("/login")
 
 # ---------------------------------------------------------------------------
 # Process tracking for long-running background tasks
@@ -177,7 +198,7 @@ pre{background:#000;border:1px solid #0f0;padding:10px;max-height:340px;overflow
 .loot-meta{color:#444;white-space:nowrap;margin-left:12px}
 </style></head><body>
 
-<h1>&#x1F5A5; HexBox C2</h1>
+<h1>&#x1F5A5; HexBox C2 <form method="POST" action="/logout" style="display:inline"><button style="float:right;font-size:.7em;padding:3px 8px;border-color:#555;color:#555">Logout</button></form></h1>
 <div class="ts" id="ts">{{ts}}</div>
 
 <div class="tab-bar">
@@ -388,6 +409,48 @@ setInterval(refreshProcs,15000);
 # Routes — utility
 # ---------------------------------------------------------------------------
 
+_LOGIN_HTML = """<!DOCTYPE html>
+<html><head><title>HexBox — Login</title>
+<style>
+*{box-sizing:border-box}
+body{background:#0a0a0a;color:#0f0;font-family:monospace;
+     display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{border:1px solid #0f0;padding:32px 40px;min-width:340px}
+h1{margin:0 0 24px;font-size:1.2em}
+input{width:100%;background:#111;color:#0f0;border:1px solid #333;
+      padding:8px;font-family:monospace;font-size:.9em;margin-bottom:12px}
+button{width:100%;background:#111;color:#0f0;border:1px solid #0f0;
+       padding:8px;font-family:monospace;font-size:.9em;cursor:pointer}
+button:hover{background:#0f0;color:#000}
+.err{color:#c00;font-size:.8em;margin-bottom:8px}
+</style></head><body>
+<div class="box">
+  <h1>&#x1F5A5; HexBox C2</h1>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <form method="POST">
+    <input type="password" name="token" placeholder="Access Token" autofocus>
+    <button type="submit">Connect</button>
+  </form>
+</div>
+</body></html>"""
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        if request.form.get("token") == _TOKEN:
+            session["authed"] = True
+            return redirect("/")
+        return render_template_string(_LOGIN_HTML, error="Invalid token")
+    return render_template_string(_LOGIN_HTML, error=None)
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
 @app.route("/")
 def dash():
     return render_template_string(DASH,
@@ -430,6 +493,8 @@ def list_procs():
 
 @app.route("/stop/<name>", methods=["POST"])
 def stop_named(name: str):
+    if name not in _VALID_PROCS:
+        return jsonify(error=f"unknown process: {name}"), 400
     with _procs_lock:
         killed = _stop_proc_locked(name)
     msg = f"Stopped {name}" if killed else f"{name} was not running"
@@ -454,7 +519,10 @@ def list_loot():
 @app.route("/logs/tail")
 def tail_log():
     raw  = request.args.get("name", "c2")
-    n    = min(int(request.args.get("n", 50)), 500)
+    try:
+        n = min(int(request.args.get("n", 50)), 500)
+    except (ValueError, TypeError):
+        n = 50
     safe = "".join(c for c in raw if c.isalnum() or c in "_-")
     path = LOGS / f"{safe}.log"
     if not path.exists():
@@ -618,6 +686,10 @@ def omg_wifi():
 def pi_scan():
     data    = request.get_json(silent=True) or {}
     target  = data.get("target", SCAN_TARGET)
+    try:
+        ipaddress.ip_network(target, strict=False)
+    except ValueError:
+        return jsonify(error=f"invalid target: {target}"), 400
     out_dir = LOOT / "nmap"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = str(out_dir / f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
@@ -646,14 +718,22 @@ def pi_bc():
 
 @app.route("/pi/handshake_crack", methods=["POST"])
 def pi_crack():
-    loot_q = shlex.quote(str(LOOT / "handshakes"))
+    handshakes = LOOT / "handshakes"
+    caps = list(handshakes.glob("*.cap")) if handshakes.is_dir() else []
+    if not caps:
+        return jsonify(output="No .cap files in loot/handshakes — capture a handshake first"), 400
+    loot_q = shlex.quote(str(handshakes))
     log_q  = shlex.quote(str(LOGS / "crack.log"))
     pid = start_proc("crack",
-        f'for h in {loot_q}/*.cap; do '
+        f'for h in {loot_q}/*.cap; do [ -f "$h" ] || continue; '
         f'aircrack-ng -w /usr/share/wordlists/rockyou.txt "$h" >> {log_q}; done')
-    return jsonify(output=f"Cracking started (pid={pid}) — logs/crack.log")
+    return jsonify(output=f"Cracking {len(caps)} cap(s) (pid={pid}) — logs/crack.log")
 
 
 if __name__ == "__main__":
     print(f"[+] HexBox C2 online → http://0.0.0.0:{PORT}")
+    if not os.environ.get("HEXBOX_TOKEN") and not _HB.get("api_token"):
+        print(f"[!] Access token (set HEXBOX_TOKEN to pin): {_TOKEN}")
+    print(f"[!] WARNING: SSH host-key verification is disabled (AutoAddPolicy).")
+    print(f"[!]          Pre-populate ~/.ssh/hexbox_known_hosts and use RejectPolicy for production.")
     app.run(host="0.0.0.0", port=PORT, debug=False)

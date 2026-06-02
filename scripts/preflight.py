@@ -866,12 +866,21 @@ def _apply_config_json():
         "sharkjack":      "sharkjack",
         "packetsquirrel": "squirrel",
         "lanturtle":      "turtle",
-        "omgplug":        "omg",
     }
     for cfg_key, local_key in devmap.items():
         dev = c.get("devices", {}).get(cfg_key, {})
         if dev.get("ip") and local_key in CONFIG:
             CONFIG[local_key]["ip"] = dev["ip"]
+
+    omg_dev = c.get("devices", {}).get("omgplug", {})
+    if omg_dev.get("ip"):
+        CONFIG["omg"]["callback_ip"] = omg_dev["ip"]
+    if omg_dev.get("pass"):
+        CONFIG["omg"]["wifi_pass"] = omg_dev["pass"]
+
+    ifaces = c.get("interfaces", {})
+    if ifaces.get("management"):
+        CONFIG["hexbox"]["mgmt_interface"] = ifaces["management"]
 
     c2 = c.get("c2", {})
     if c2.get("external_ip"):

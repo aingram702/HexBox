@@ -152,11 +152,11 @@ Edit **`config.json`** in the repo root:
     "scan_target": "192.168.1.0/24"
   },
   "devices": {
-    "pineapple":      {"ip": "172.16.42.1",  "pass": "hak5pineapple"},
-    "sharkjack":      {"ip": "172.16.24.1",  "pass": "hak5shark"},
-    "packetsquirrel": {"ip": "172.16.32.1",  "pass": "hak5squirrel"},
-    "lanturtle":      {"ip": "172.16.84.1",  "pass": "hak5turtle"},
-    "omgplug":        {"ip": "192.168.1.50", "pass": "hak5omg"}
+    "pineapple":      {"ip": "172.16.42.1",  "user": "root", "pass": "hak5pineapple"},
+    "sharkjack":      {"ip": "172.16.24.1",  "user": "root", "pass": "hak5shark"},
+    "packetsquirrel": {"ip": "172.16.32.1",  "user": "root", "pass": "hak5squirrel"},
+    "lanturtle":      {"ip": "172.16.84.1",  "user": "root", "pass": "hak5turtle"},
+    "omgplug":        {"ip": "192.168.1.50", "user": "root", "pass": "hak5omg"}
   },
   "c2": {
     "external_ip": "YOUR.C2.IP.HERE"
