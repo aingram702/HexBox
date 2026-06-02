@@ -263,7 +263,7 @@ hexbox/
 
 ---
 
-## 🗺️ Roadmap for the Future
+## 🗺️ Roadmap
 
 - [ ] Bash Bunny payload integration
 - [ ] Flipper Zero serial bridge

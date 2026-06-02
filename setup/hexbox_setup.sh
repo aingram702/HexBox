@@ -23,7 +23,7 @@ curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/t
 
 # Directory structure
 mkdir -p ~/hexbox/{loot,payloads,scripts,logs,c2,modules}
-mkdir -p ~/hexbox/loot/{pcaps,handshakes,creds,screenshots}
+mkdir -p ~/hexbox/loot/{pcaps,handshakes,creds,screenshots,nmap,hashes,exfil,shark}
 
 # Enable IP forwarding for MITM
 echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
@@ -44,4 +44,5 @@ WantedBy=multi-user.target
 EOF
 sudo systemctl enable macspoof.service
 
-echo "[+] Base done. Reboot, then run hexbox_c2.py"
+echo "[+] Base provisioning done."
+echo "[*] Next: run setup/configure.sh to set your attacker IP, then reboot."
