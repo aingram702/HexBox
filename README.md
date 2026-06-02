@@ -1,7 +1,7 @@
 # 🔥 HexBox — The Ultimate Red Team Multitool
 
 > *"One box to rule them all."*
-![Alt text](hexbox-banner.png)
+![Alt text](/images/hexbox-banner.png)
 HexBox is a portable, all-in-one offensive security platform built around a **Raspberry Pi 3B** that orchestrates an arsenal of **Hak5 hardware** into a unified red team weapon system. Drop it in a backpack, plug it into a wall outlet, and run full-spectrum engagements from a single web dashboard.
 
 ![Status](https://img.shields.io/badge/status-operational-red) ![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%203B-c51a4a) ![License](https://img.shields.io/badge/license-Authorized%20Use%20Only-black) ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
