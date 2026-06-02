@@ -9,6 +9,11 @@
     "log_dir":        "~/hexbox/logs",
     "scan_target":    "192.168.1.0/24"
   },
+  "interfaces": {
+    "management": "wlan0",
+    "responder":  "eth0",
+    "bettercap":  "wlan0"
+  },
   "devices": {
     "pineapple": {
       "ip":       "172.16.42.1",

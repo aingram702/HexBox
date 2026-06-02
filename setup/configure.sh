@@ -1,7 +1,8 @@
 #!/bin/bash
 # ~/hexbox/setup/configure.sh
-# One-command configuration: sets attacker IP and credentials across all files.
-# Run this once after cloning the repo or after changing your deployment IP.
+# One-command configuration: sets attacker IP, credentials, and interface names
+# across all files. Run this once after cloning the repo or after changing
+# your deployment environment.
 
 set -euo pipefail
 
@@ -16,10 +17,17 @@ echo ""
 echo "  Leave any field blank to keep the default shown in [brackets]."
 echo ""
 
-# ---- Gather operator values ----
+# ---- Network / IP settings ----
 read -rp "[?] HexBox / attacker IP          [10.0.0.99]:       " HEXBOX_IP
 read -rp "[?] Default scan target subnet    [192.168.1.0/24]:  " SCAN_NET
 read -rp "[?] C2 external server IP         [YOUR.C2.IP.HERE]: " C2_IP
+
+echo ""
+echo "  Network interfaces (run 'ip link' to list yours):"
+read -rp "[?] Management / bettercap iface  [wlan0]:           " MGMT_IF
+read -rp "[?] Responder / wired iface       [eth0]:            " WIRED_IF
+read -rp "[?] Public IP for Turtle AutoSSH  [<YOUR_HEXBOX_PUBLIC_IP>]: " TURTLE_IP
+read -rp "[?] MITM DNS redirect IP          [10.10.10.10]:     " MITM_IP
 
 echo ""
 echo "  Device passwords (press Enter to keep factory defaults):"
@@ -33,6 +41,10 @@ read -rp "[?] OMG Plug pass                 [hak5omg]:         " OMG_PASS
 HEXBOX_IP=${HEXBOX_IP:-10.0.0.99}
 SCAN_NET=${SCAN_NET:-192.168.1.0/24}
 C2_IP=${C2_IP:-YOUR.C2.IP.HERE}
+MGMT_IF=${MGMT_IF:-wlan0}
+WIRED_IF=${WIRED_IF:-eth0}
+TURTLE_IP=${TURTLE_IP:-<YOUR_HEXBOX_PUBLIC_IP>}
+MITM_IP=${MITM_IP:-10.10.10.10}
 PINE_PASS=${PINE_PASS:-hak5pineapple}
 SHARK_PASS=${SHARK_PASS:-hak5shark}
 SQ_PASS=${SQ_PASS:-hak5squirrel}
@@ -52,6 +64,11 @@ cat > "$CONFIG" <<EOF
     "loot_dir":       "~/hexbox/loot",
     "log_dir":        "~/hexbox/logs",
     "scan_target":    "$SCAN_NET"
+  },
+  "interfaces": {
+    "management": "$MGMT_IF",
+    "responder":  "$WIRED_IF",
+    "bettercap":  "$MGMT_IF"
   },
   "devices": {
     "pineapple":      {"ip": "172.16.42.1",  "user": "root", "pass": "$PINE_PASS",  "api_port": 1471},
@@ -84,6 +101,20 @@ if [ "$HEXBOX_IP" != "$OLD_IP" ]; then
     done
 else
     echo "[*] Payload IP unchanged (already $HEXBOX_IP)"
+fi
+
+# ---- Patch Turtle AutoSSH config placeholder ----
+TURTLE_FOOTHOLD="$HEXBOX_DIR/payloads/turtle_foothold.sh"
+if [ -f "$TURTLE_FOOTHOLD" ] && [ "$TURTLE_IP" != "<YOUR_HEXBOX_PUBLIC_IP>" ]; then
+    sed -i "s|<YOUR_HEXBOX_PUBLIC_IP>|$TURTLE_IP|g" "$TURTLE_FOOTHOLD"
+    echo "[*] Turtle foothold: SERVER set to $TURTLE_IP"
+fi
+
+# ---- Patch Squirrel MITM DNS redirect IP ----
+SQUIRREL_MITM="$PAYLOADS/squirrel_mitm.sh"
+if [ -f "$SQUIRREL_MITM" ] && [ "$MITM_IP" != "10.10.10.10" ]; then
+    sed -i "s|10\.10\.10\.10|$MITM_IP|g" "$SQUIRREL_MITM"
+    echo "[*] Squirrel MITM: DNS redirect IP set to $MITM_IP"
 fi
 
 echo ""
