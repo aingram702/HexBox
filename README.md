@@ -20,7 +20,7 @@ The authors assume **zero liability** for misuse. You are the operator. You are 
 
 ## 🎯 What is HexBox?
 
-HexBox turns a Raspberry Pi 3B into a **command-and-control hub** for the following Hak5 ecosystem devices:
+HexBox turns a Raspberry Pi 3B into a **command-and-control hub** for the following Hak5 ecosystem devices — and more:
 
 | Device | Role |
 |--------|------|
@@ -29,6 +29,10 @@ HexBox turns a Raspberry Pi 3B into a **command-and-control hub** for the follow
 | 🐿️ **Packet Squirrel** | Inline MITM, traffic capture, DNS spoofing |
 | 🐢 **LAN Turtle** | Persistent foothold, reverse SSH tunnels, Responder, Meterpreter |
 | 🔌 **OMG Plug** | Wireless HID payload delivery via DuckyScript |
+| 🐇 **Bash Bunny** | Multi-mode HID+ECM attacks, switch-selectable payloads |
+| 🐬 **Flipper Zero** | NFC/RFID cloning, Sub-GHz capture, BadUSB — serial bridge |
+
+Also integrates **Sliver C2** (implant generation and session management) and **BloodHound CE** (AD graph auto-ingest).
 
 All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 
@@ -37,18 +41,20 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 ## 🏗️ Architecture
 
 ```
-                    ┌─────────────────────┐
-                    │   HexBox (Pi 3B)    │
-                    │  Command & Control  │
-                    │   Flask Dashboard   │
-                    └──────────┬──────────┘
-                               │
-        ┌──────────┬───────────┼──────────┬──────────┐
-        │          │           │          │          │
-   ┌────▼───┐ ┌────▼────┐ ┌────▼────┐ ┌──▼───┐ ┌────▼────┐
-   │Pineapple│ │SharkJack│ │Packet   │ │ LAN  │ │ OMG    │
-   │ (WiFi) │ │ (Recon) │ │Squirrel │ │Turtle│ │ Plug   │
-   └────────┘ └─────────┘ └─────────┘ └──────┘ └────────┘
+                    ┌─────────────────────────────┐
+                    │       HexBox (Pi 3B)         │
+                    │    Command & Control Hub     │
+                    │  Flask Dashboard :1337        │
+                    │  Catcher :8000  Sliver :31337 │
+                    └──────────────┬───────────────┘
+                                   │ SSH / Serial / USB
+   ┌──────────┬──────────┬─────────┼──────────┬──────────┬──────────┬──────────┐
+   │          │          │         │          │          │          │          │
+┌──▼──┐  ┌───▼──┐  ┌────▼──┐  ┌───▼──┐  ┌───▼──┐  ┌───▼──┐  ┌────▼──┐  ┌────▼──┐
+│Pine │  │Shark │  │Packet │  │ LAN  │  │ OMG  │  │Bash  │  │Flipper│  │Sliver │
+│apple│  │ Jack │  │Squirrel│  │Turtle│  │ Plug │  │Bunny │  │ Zero  │  │  C2   │
+└─────┘  └──────┘  └───────┘  └──────┘  └──────┘  └──────┘  └───────┘  └───────┘
+  WiFi    Recon      MITM      Pivot      HID     HID+ECM   NFC/RFID   Implants
 ```
 
 ---
@@ -69,9 +75,13 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 - ✅ **Network Map** — nmap XML parsing populates a sortable host/service/role table; role inference (DC, web server, printer, etc.)
 - ✅ **System Profile Collection** — Captures hostname, domain membership, IPs, local admins, AV products, running processes
 - ✅ **Active Directory Recon** — No-module LDAP enumeration: users, computers, domain admins
+- ✅ **BloodHound Auto-Ingest** — `bloodhound_collect.ps1` builds full BloodHound v5 JSON (users, computers, groups, domains with real SIDs); Intel tab shows summary; one-click upload to BloodHound CE via REST API
 - ✅ **One-Click Report Generator** — Produces a self-contained HTML engagement report with all intel sections
 
 ### Offense & Collection
+- ✅ **Bash Bunny Integration** — SSH device management, install switch payloads from dashboard, pull loot; `bunny_recon.sh` (ECM subnet sweep) and `bunny_exfil.sh` (HID+ECM Windows credential dump)
+- ✅ **Flipper Zero Serial Bridge** — pyserial bridge to `/dev/ttyACM0`; dashboard buttons for NFC detect, RFID read, Sub-GHz RX, BadUSB execution
+- ✅ **Sliver C2 Implant Generation** — Start/stop sliver-server daemon, generate implants (Windows/Linux/macOS × amd64/arm64 × exe/shellcode/shared), list active sessions, download generated implants
 - ✅ **Payload Builder** — Web UI generates custom DuckyScript for any of 5 payload types with configurable IP/port/delay
 - ✅ **Hashcat Integration** — Auto-extracts NTLMv2 hashes from Responder logs and launches hashcat (`-m 5600`) cracking
 - ✅ **PMKID Capture** — One-click hcxdumptool PMKID attack via Pineapple
@@ -105,6 +115,12 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 - Packet Squirrel (Mark II recommended)
 - LAN Turtle
 - OMG Plug (or OMG Cable / Adapter)
+- **Bash Bunny** (Mark II) — connects at 172.16.64.1 in arming mode
+
+### Phase 4 Add-ons
+- **Flipper Zero** — connected via USB (appears as `/dev/ttyACM0`); requires pyserial (`pip install pyserial`)
+- **Sliver C2** — install on the Pi: `curl https://sliver.sh/install | sudo bash`
+- **BloodHound CE** — install separately; configure URL and credentials in `config.json`
 
 ### Optional but Recommended
 - 3.5" touchscreen HAT (for headless field ops)
@@ -177,8 +193,12 @@ Edit **`config.json`** in the repo root:
     "sharkjack":      {"ip": "172.16.24.1",  "user": "root", "pass": "hak5shark"},
     "packetsquirrel": {"ip": "172.16.32.1",  "user": "root", "pass": "hak5squirrel"},
     "lanturtle":      {"ip": "172.16.84.1",  "user": "root", "pass": "hak5turtle"},
-    "omgplug":        {"ip": "192.168.1.50", "user": "root", "pass": "hak5omg"}
+    "omgplug":        {"ip": "192.168.1.50", "user": "root", "pass": "hak5omg"},
+    "bashbunny":      {"ip": "172.16.64.1",  "user": "root", "pass": "hak5bunny"}
   },
+  "flipper":    {"serial_port": "/dev/ttyACM0"},
+  "bloodhound": {"url": "http://localhost:8080", "username": "admin", "password": "BloodHound!"},
+  "sliver":     {"host": "127.0.0.1", "port": 31337},
   "c2": {
     "external_ip": "YOUR.C2.IP.HERE"
   }
@@ -253,11 +273,11 @@ The dashboard has **6 tabs**:
 
 | Tab | Purpose |
 |-----|---------|
-| **Devices** | Control all Hak5 devices, launch Pi-local tools, live activity feed |
-| **Intel** | Parsed NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles |
-| **Payloads** | Build and download custom DuckyScript payloads, deploy to OMG Plug |
+| **Devices** | Control all 7 devices + Pi local tools; Sliver C2 panel; software update; live activity feed |
+| **Intel** | NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles, BloodHound data |
+| **Payloads** | Build and download custom DuckyScript payloads; deploy to OMG Plug |
 | **Loot** | File browser with one-click download for any captured file |
-| **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, etc.) |
+| **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, Sliver, etc.) |
 | **Report** | One-click HTML engagement report generator covering all intel |
 
 ### Credential Catcher
@@ -266,7 +286,14 @@ Run alongside the dashboard to receive payload callbacks:
 ```bash
 python3 ~/hexbox/c2/catcher.py
 ```
-Receives: Chrome databases (`/upload`), WiFi profiles (`/wifi`), system info (`/sysinfo`), and serves payloads to devices (`/serve/<name>`).
+
+| Endpoint | Payload | Description |
+|----------|---------|-------------|
+| `POST /upload` | `browser_exfil.ducky` | Base64 Chrome Login DB |
+| `POST /wifi` | `wifi_steal.ducky` | WiFi profile plaintext dump |
+| `POST /sysinfo` | `sysinfo.ducky` / `ad_recon.ducky` / Bunny | Base64 JSON sysinfo blob |
+| `POST /bloodhound` | `bloodhound_collect.ducky` | Base64 BloodHound v5 JSON |
+| `GET /serve/<name>` | All | Serves payload files to stagers |
 
 ### One-Shot Engagement Mode
 ```bash
@@ -285,6 +312,43 @@ bash ~/hexbox/scripts/opsec.sh
 ```
 Rotates MACs, spoofs hostname, suppresses bash history, and encrypts existing loot with GPG AES-256.
 
+### Bash Bunny Payload Installation
+
+From the dashboard's **Devices → Bash Bunny** card:
+- **Net Recon** — SSH-triggered recon (ARP scan + nmap) results appear in `/bunny/loot`
+- **Pull Loot** — SFTP pull from `/tmp/bb_recon/` or `/root/loot/` to `loot/bunny/`
+- **Install Switch1** — Copies `payloads/bunny_recon.sh` to `/root/udisk/payloads/switch1/payload.sh` via SFTP
+- **Install Switch2** — Copies `payloads/bunny_exfil.sh` to `/root/udisk/payloads/switch2/payload.sh` via SFTP
+
+### Flipper Zero Serial Bridge
+
+Connect your Flipper Zero via USB. Dashboard auto-detects `/dev/ttyACM0` (configurable in `config.json → flipper.serial_port`). Install pyserial first:
+```bash
+pip install pyserial
+```
+Dashboard buttons send CLI commands to the Flipper and display output.
+
+### Sliver C2
+
+Install Sliver on the Pi:
+```bash
+curl https://sliver.sh/install | sudo bash
+```
+From the **Devices → Sliver C2** panel:
+1. Click **Start Server** to launch `sliver-server daemon`
+2. Select OS/arch/format and a listener URL, then click **Generate Implant**
+3. Active sessions appear automatically in the panel
+4. Generated implants are saved to `loot/implants/` and downloadable from the dashboard
+
+### BloodHound Auto-Ingest
+
+1. Deploy `bloodhound_collect.ducky` on an OMG Plug or type it via a Bash Bunny switch
+2. The PowerShell script collects users, computers, groups, and domains with real SIDs and POSTs BloodHound v5 JSON to `catcher.py /bloodhound`
+3. Data lands in `loot/bloodhound/`
+4. In the **Intel → BloodHound Data** section, click **Upload to BloodHound** to push directly to BloodHound CE
+
+Configure BloodHound CE credentials in `config.json → bloodhound`.
+
 ---
 
 ## 📁 Project Structure
@@ -298,18 +362,22 @@ hexbox/
 │   ├── configure.sh                 # Interactive one-time configuration
 │   └── install_dependancies.sh      # Install Python deps from requirements.txt
 ├── c2/
-│   ├── hexbox_c2.py                 # Main Flask C2 dashboard (Phase 3: 6 tabs, SSE, Intel, Reports)
-│   ├── catcher.py                   # Credential receiver: Chrome, WiFi, sysinfo
-│   └── parse_loot.py                # Loot intelligence: hash parsing, nmap XML, WiFi, report gen
+│   ├── hexbox_c2.py                 # Main Flask C2 dashboard (Phase 4: Bunny, Flipper, Sliver, BloodHound)
+│   ├── catcher.py                   # Credential receiver: Chrome, WiFi, sysinfo, BloodHound JSON
+│   └── parse_loot.py                # Loot intelligence: hash parsing, nmap XML, WiFi, BloodHound, report gen
 ├── payloads/
 │   ├── reverse_shell.ducky          # OMG: Windows reverse shell
 │   ├── browser_exfil.ducky          # OMG: Chrome credential theft
 │   ├── wifi_steal.ducky             # OMG: WiFi profile dump
-│   ├── sysinfo.ducky                # OMG: Windows system profiling (NEW)
-│   ├── ad_recon.ducky               # OMG: Active Directory enumeration (NEW)
+│   ├── sysinfo.ducky                # OMG: Windows system profiling
+│   ├── ad_recon.ducky               # OMG: Active Directory enumeration
+│   ├── bloodhound_collect.ducky     # OMG: BloodHound v5 JSON collection
 │   ├── chrome.ps1                   # PowerShell DPAPI exfil stager
-│   ├── sysinfo.ps1                  # System recon: hostname/domain/admins/AV (NEW)
-│   ├── ad_recon.ps1                 # AD enumeration via .NET LDAP (no module required) (NEW)
+│   ├── sysinfo.ps1                  # System recon: hostname/domain/admins/AV
+│   ├── ad_recon.ps1                 # AD enumeration via .NET LDAP (no module required)
+│   ├── bloodhound_collect.ps1       # BloodHound v5 data collector (users/computers/groups/domains with real SIDs)
+│   ├── bunny_recon.sh               # Bash Bunny Switch 1: ECM net recon → exfil to HexBox
+│   ├── bunny_exfil.sh               # Bash Bunny Switch 2: HID+ECM Windows credential dump
 │   ├── sharkjack_recon.sh           # Shark Jack auto-recon
 │   ├── squirrel_mitm.sh             # Packet Squirrel transparent MITM
 │   ├── turtle_foothold.sh           # LAN Turtle module provisioning
@@ -319,15 +387,16 @@ hexbox/
 │   ├── opsec.sh                     # MAC rotation, GPG loot encryption
 │   ├── pineapple_auto.py            # Pineapple REST API automation
 │   └── preflight.py                 # Pre-deployment validation
-├── loot/                            # Captured data lands here
-│   ├── pcaps/
-│   ├── handshakes/
-│   ├── creds/
-│   ├── screenshots/
-│   ├── nmap/
-│   ├── hashes/
-│   ├── exfil/
-│   └── shark/
+├── loot/                            # Captured data lands here (auto-created)
+│   ├── creds/                       # Chrome DBs, WiFi profiles, sysinfo JSON
+│   ├── nmap/                        # Nmap XML + text scan results
+│   ├── handshakes/                  # WPA .cap / .pcapng files
+│   ├── pcaps/                       # Packet Squirrel PCAPs
+│   ├── shark/                       # Shark Jack loot
+│   ├── bunny/                       # Bash Bunny recon output
+│   ├── bloodhound/                  # BloodHound v5 JSON files
+│   ├── implants/                    # Generated Sliver implants
+│   └── reports/                     # Generated HTML engagement reports
 └── logs/                            # Operational logs (c2.log, responder.log, etc.)
 ```
 
@@ -341,6 +410,10 @@ hexbox/
 - Consider routing Pi callbacks through Tor or a VPN for off-site C2
 - DuckyScript payloads are **plaintext on the OMG Plug** — assume they can be recovered if the device is captured
 - `config.json` contains device passwords — do not commit it with real credentials to a public repo
+- Bash Bunny payloads installed via the dashboard are stored **on the device unencrypted** — factory reset if captured
+- Sliver operator config (`~/.sliver/hexbox-operator.cfg`) grants full C2 access — protect the Pi accordingly
+- BloodHound password in `config.json` is plaintext; use `config.local.json` (gitignored) for production credentials
+- Generated Sliver implants in `loot/implants/` are live malware — ensure the Pi is air-gapped or firewalled from untrusted networks
 
 ---
 
@@ -350,12 +423,9 @@ hexbox/
 - ✅ Phase 1: Core C2 dashboard, device control, process management
 - ✅ Phase 2: Config-driven interfaces, parallel status, tabbed dashboard, loot/log APIs, auth, security hardening
 - ✅ Phase 3: SSE live feed, intel engine (hash/WiFi/nmap/sysinfo parsing), payload builder, engagement sessions, hashcat, PMKID, AD recon, HTML report generator
+- ✅ Phase 4: Bash Bunny integration, Flipper Zero serial bridge, Sliver C2 implant generation, BloodHound CE auto-ingest
 
 ### Upcoming
-- [ ] Bash Bunny payload integration
-- [ ] Flipper Zero serial bridge
-- [ ] Sliver C2 implant generation
-- [ ] BloodHound auto-ingestion (feed AD recon output directly to BloodHound JSON)
 - [ ] Custom Evil Portal templates (O365, Okta, Duo, Google)
 - [ ] PCAP analysis dashboard (tshark protocol/credential stats)
 - [ ] GPS war-driving mode with Kismet integration

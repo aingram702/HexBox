@@ -40,7 +40,24 @@
       "ip":   "192.168.1.50",
       "user": "root",
       "pass": "hak5omg"
+    },
+    "bashbunny": {
+      "ip":   "172.16.64.1",
+      "user": "root",
+      "pass": "hak5bunny"
     }
+  },
+  "flipper": {
+    "serial_port": "/dev/ttyACM0"
+  },
+  "bloodhound": {
+    "url":      "http://localhost:8080",
+    "username": "admin",
+    "password": "BloodHound!"
+  },
+  "sliver": {
+    "host": "127.0.0.1",
+    "port": 31337
   },
   "c2": {
     "external_ip":   "YOUR.C2.IP.HERE",

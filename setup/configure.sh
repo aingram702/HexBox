@@ -37,6 +37,11 @@ read -rp "[?] Packet Squirrel pass          [hak5squirrel]:    " SQ_PASS
 read -rp "[?] LAN Turtle pass               [hak5turtle]:      " TURTLE_PASS
 read -rp "[?] OMG Plug IP                   [192.168.1.50]:    " OMG_IP
 read -rp "[?] OMG Plug pass                 [hak5omg]:         " OMG_PASS
+read -rp "[?] Bash Bunny pass               [hak5bunny]:       " BUNNY_PASS
+read -rp "[?] Flipper Zero serial port      [/dev/ttyACM0]:    " FLIPPER_PORT
+read -rp "[?] BloodHound CE URL             [http://localhost:8080]: " BH_URL
+read -rp "[?] BloodHound username           [admin]:           " BH_USER
+read -rp "[?] BloodHound password           [BloodHound!]:     " BH_PASS
 
 HEXBOX_IP=${HEXBOX_IP:-10.0.0.99}
 SCAN_NET=${SCAN_NET:-192.168.1.0/24}
@@ -51,6 +56,11 @@ SQ_PASS=${SQ_PASS:-hak5squirrel}
 TURTLE_PASS=${TURTLE_PASS:-hak5turtle}
 OMG_IP=${OMG_IP:-192.168.1.50}
 OMG_PASS=${OMG_PASS:-hak5omg}
+BUNNY_PASS=${BUNNY_PASS:-hak5bunny}
+FLIPPER_PORT=${FLIPPER_PORT:-/dev/ttyACM0}
+BH_URL=${BH_URL:-http://localhost:8080}
+BH_USER=${BH_USER:-admin}
+BH_PASS=${BH_PASS:-BloodHound!}
 
 # ---- Write config.json via Python (avoids shell injection in passwords) ----
 HEXBOX_CONFIG="$CONFIG" \
@@ -58,6 +68,8 @@ HEXBOX_IP="$HEXBOX_IP" SCAN_NET="$SCAN_NET" C2_IP="$C2_IP" \
 MGMT_IF="$MGMT_IF" WIRED_IF="$WIRED_IF" \
 PINE_PASS="$PINE_PASS" SHARK_PASS="$SHARK_PASS" SQ_PASS="$SQ_PASS" \
 TURTLE_PASS="$TURTLE_PASS" OMG_IP="$OMG_IP" OMG_PASS="$OMG_PASS" \
+BUNNY_PASS="$BUNNY_PASS" FLIPPER_PORT="$FLIPPER_PORT" \
+BH_URL="$BH_URL" BH_USER="$BH_USER" BH_PASS="$BH_PASS" \
 python3 - <<'PYEOF'
 import json, os
 
@@ -84,6 +96,19 @@ config = {
         "packetsquirrel": {"ip": "172.16.32.1", "user": "root", "pass": e("SQ_PASS",     "hak5squirrel")},
         "lanturtle":      {"ip": "172.16.84.1", "user": "root", "pass": e("TURTLE_PASS", "hak5turtle")},
         "omgplug":        {"ip": e("OMG_IP", "192.168.1.50"), "user": "root", "pass": e("OMG_PASS", "hak5omg")},
+        "bashbunny":      {"ip": "172.16.64.1", "user": "root", "pass": e("BUNNY_PASS",  "hak5bunny")},
+    },
+    "flipper": {
+        "serial_port": e("FLIPPER_PORT", "/dev/ttyACM0"),
+    },
+    "bloodhound": {
+        "url":      e("BH_URL",  "http://localhost:8080"),
+        "username": e("BH_USER", "admin"),
+        "password": e("BH_PASS", "BloodHound!"),
+    },
+    "sliver": {
+        "host": "127.0.0.1",
+        "port": 31337,
     },
     "c2": {
         "external_ip":   e("C2_IP", "YOUR.C2.IP.HERE"),

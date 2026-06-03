@@ -364,6 +364,53 @@ def _guess_role(port_nums: set) -> str:
     return "Unknown"
 
 
+def aggregate_bloodhound(loot_dir: Path) -> dict:
+    """Scan loot/bloodhound/ for BloodHound JSON v5 files and return a summary."""
+    bh_dir = loot_dir / "bloodhound"
+    summary: list[dict] = []
+    total_objects = 0
+    if not bh_dir.exists():
+        return {"summary": summary, "files": 0, "total_objects": 0}
+
+    seen: dict[str, dict] = {}
+    for jf in sorted(bh_dir.glob("*.json")):
+        try:
+            payload = json.loads(jf.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        meta = payload.get("meta", {})
+        bh_type = meta.get("type", jf.stem.split("_")[-1])
+        count = meta.get("count", len(payload.get("data", [])))
+        domain = ""
+        data = payload.get("data", [])
+        if data and isinstance(data[0], dict):
+            props = data[0].get("Properties", {})
+            domain = props.get("domain", "")
+
+        key = f"{bh_type}:{domain}"
+        if key not in seen or jf.stat().st_mtime > seen[key]["_mtime"]:
+            seen[key] = {
+                "type":     bh_type,
+                "count":    count,
+                "domain":   domain,
+                "captured": datetime.fromtimestamp(jf.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "file":     jf.name,
+                "_mtime":   jf.stat().st_mtime,
+            }
+        total_objects += count
+
+    for v in seen.values():
+        v.pop("_mtime", None)
+        summary.append(v)
+
+    summary.sort(key=lambda x: x.get("type", ""))
+    return {
+        "summary":       summary,
+        "files":         len(list(bh_dir.glob("*.json"))),
+        "total_objects": total_objects,
+    }
+
+
 def _ip_sort_key(ip: str) -> tuple:
     try:
         return tuple(int(x) for x in ip.split("."))
