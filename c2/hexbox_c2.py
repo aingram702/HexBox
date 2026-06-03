@@ -4,7 +4,7 @@
 from flask import (Flask, render_template_string, request, jsonify,
                    send_file, session, redirect, Response)
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import subprocess, paramiko, requests as _req, json, os, signal
+import subprocess, paramiko, requests as _req, json, os, signal, sys
 import threading, shlex, socket, re, secrets, ipaddress, queue, time
 from datetime import datetime
 from pathlib import Path
@@ -404,6 +404,16 @@ tr:hover td{background:#0d0d0d}
 <div class="bar" style="margin-top:6px">
   <h3>&#x26A1; Live Activity <span id="feed-dot" style="font-size:.7em;color:#333">&#x25CF;</span></h3>
   <div id="feed"><span style="color:#333">Connecting to event stream...</span></div>
+</div>
+<div class="bar" style="margin-top:6px">
+  <h3>&#x1F527; System</h3>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <button onclick="checkUpdate()">&#x1F50D; Check for Updates</button>
+    <button onclick="applyUpdate()" id="btn-update" class="warn" style="display:none">&#x2B07; Pull &amp; Apply</button>
+    <button onclick="restartC2()" class="kill">&#x21BA; Restart C2</button>
+    <span id="update-status" style="color:#555;font-size:.78em"></span>
+  </div>
+  <pre id="update-out" style="display:none;max-height:160px;margin-top:6px"></pre>
 </div>
 </div><!-- /pane-devices -->
 
@@ -951,6 +961,67 @@ async function loadActiveEngagement() {
     el.textContent = j.active ? '● ' + j.active : '— No engagement';
   } catch(_) {
     document.getElementById('eng-name').textContent = '— No engagement';
+  }
+}
+
+// ---- Software update ----
+async function checkUpdate() {
+  const status = document.getElementById('update-status');
+  const pre    = document.getElementById('update-out');
+  status.textContent = 'Checking...';
+  pre.style.display  = 'none';
+  try {
+    const j = await (await fetch('/update/check')).json();
+    if (j.error) { status.textContent = '[ERR] ' + j.error; return; }
+    if (j.up_to_date) {
+      status.textContent = `Up to date (${j.local})`;
+      document.getElementById('btn-update').style.display = 'none';
+    } else {
+      status.textContent = `Update available: ${j.local} → ${j.remote}`;
+      document.getElementById('btn-update').style.display = '';
+      if (j.pending) {
+        pre.textContent   = j.pending;
+        pre.style.display = '';
+      }
+    }
+  } catch(e) { status.textContent = '[ERR] ' + e; }
+}
+
+async function applyUpdate() {
+  const status = document.getElementById('update-status');
+  const pre    = document.getElementById('update-out');
+  status.textContent = 'Pulling updates...';
+  pre.style.display  = 'none';
+  document.getElementById('btn-update').disabled = true;
+  try {
+    const j = await (await fetch('/update/apply', {method:'POST'})).json();
+    pre.textContent   = j.output || j.error || '(no output)';
+    pre.style.display = '';
+    if (j.error || j.returncode !== 0) {
+      status.textContent = 'Update failed — check output';
+      toast('Update failed', 'err');
+    } else {
+      status.textContent = 'Update applied — restart C2 to load new code';
+      document.getElementById('btn-update').style.display = 'none';
+      toast('Update applied! Restart C2 to load changes.', 'warn');
+    }
+  } catch(e) {
+    status.textContent = '[ERR] ' + e;
+  } finally {
+    document.getElementById('btn-update').disabled = false;
+  }
+}
+
+async function restartC2() {
+  if (!confirm('Restart the C2 dashboard? You will need to reload this page.')) return;
+  try {
+    const j = await (await fetch('/restart', {method:'POST'})).json();
+    document.getElementById('update-status').textContent = j.output;
+    toast('Restarting — reload in a few seconds...', 'warn');
+    setTimeout(() => location.reload(), 4000);
+  } catch(_) {
+    toast('Restarting — reload in a few seconds...', 'warn');
+    setTimeout(() => location.reload(), 4000);
   }
 }
 
@@ -1644,6 +1715,71 @@ def pi_hashcat():
         f"-o {cracked_q} --quiet >> {log_q} 2>&1")
     _log(f"Hashcat started: {len(hashes)} NTLMv2 hash(es)")
     return jsonify(output=f"Hashcat started (pid={pid}) — {len(hashes)} hash(es) → loot/cracked.txt")
+
+# ---------------------------------------------------------------------------
+# Software update + restart
+# ---------------------------------------------------------------------------
+
+_REPO = Path(__file__).parent.parent
+
+
+@app.route("/update/check")
+def update_check():
+    try:
+        # Fetch remote metadata without touching working tree
+        subprocess.run(["git", "-C", str(_REPO), "fetch"],
+                       capture_output=True, timeout=30)
+        local = subprocess.run(
+            ["git", "-C", str(_REPO), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "-C", str(_REPO), "rev-parse", "@{u}"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        pending = subprocess.run(
+            ["git", "-C", str(_REPO), "log", "--oneline", "HEAD..@{u}"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        return jsonify(
+            local=local[:8],
+            remote=remote[:8],
+            up_to_date=(local == remote),
+            pending=pending,
+        )
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/update/apply", methods=["POST"])
+def update_apply():
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(_REPO), "pull", "--rebase", "--autostash"],
+            capture_output=True, text=True, timeout=120,
+        )
+        output = result.stdout + result.stderr
+        _log(f"Update applied (rc={result.returncode}): {output[:200]}")
+        broadcast("update", {"ts": datetime.now().strftime("%H:%M:%S"),
+                              "rc": result.returncode})
+        return jsonify(output=output, returncode=result.returncode)
+    except subprocess.TimeoutExpired:
+        return jsonify(error="git pull timed out", returncode=1), 500
+    except Exception as e:
+        return jsonify(error=str(e), returncode=1), 500
+
+
+@app.route("/restart", methods=["POST"])
+def restart_c2():
+    _log("C2 restart requested via dashboard")
+
+    def _do_restart():
+        time.sleep(1)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    threading.Thread(target=_do_restart, daemon=True).start()
+    return jsonify(output="Restarting C2 — reload the page in a few seconds...")
+
 
 # ---------------------------------------------------------------------------
 # Startup
