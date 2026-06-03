@@ -55,17 +55,38 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 
 ## 🧰 Features
 
-- ✅ **Unified Web Dashboard** — Control every device from one browser tab
-- ✅ **Device Status Indicators** — Live ping dots show which devices are reachable
-- ✅ **Process Management** — Start and stop Pi-local services (Responder, Bettercap, crack) from the dashboard
-- ✅ **Automated Recon** — One-click nmap with configurable target subnet
-- ✅ **Credential Harvesting** — Built-in Responder, browser cred exfil, WiFi profile theft
-- ✅ **MITM Suite** — Bettercap, ARP spoofing, DNS spoofing, transparent proxying
-- ✅ **HID Attack Delivery** — Pre-built DuckyScript payloads for OMG Plug
-- ✅ **Persistent C2** — Auto-SSH reverse tunnels via LAN Turtle
-- ✅ **Loot Management** — Centralized storage, auto-pull from all devices via SFTP
-- ✅ **OPSEC Hardening** — MAC randomization, Tor routing, encrypted loot at rest
-- ✅ **"Engage" Button** — Single script launches a full assessment with graceful shutdown on Ctrl+C
+### Core Platform
+- ✅ **Unified Web Dashboard** — 6-tab C2 interface: Devices, Intel, Payloads, Loot, Logs, Report
+- ✅ **Token Authentication** — Session-based login with configurable `HEXBOX_TOKEN`; all routes protected
+- ✅ **Real-Time Event Feed** — SSE-powered live activity stream; toast notifications for new loot and process events
+- ✅ **Engagement Sessions** — Named engagement tracking with start time, target, and notes
+- ✅ **Device Status Indicators** — Live ping dots with parallel reachability checks
+
+### Intelligence & Analysis
+- ✅ **Loot Intelligence Engine** — `parse_loot.py` auto-parses all captured data into structured intel
+- ✅ **NTLM Hash Extraction** — Auto-discovers NTLMv1/v2 hashes from Responder logs with deduplication
+- ✅ **WiFi Credential Parsing** — Parses stolen WiFi profiles (SSID + plaintext password table)
+- ✅ **Network Map** — nmap XML parsing populates a sortable host/service/role table; role inference (DC, web server, printer, etc.)
+- ✅ **System Profile Collection** — Captures hostname, domain membership, IPs, local admins, AV products, running processes
+- ✅ **Active Directory Recon** — No-module LDAP enumeration: users, computers, domain admins
+- ✅ **One-Click Report Generator** — Produces a self-contained HTML engagement report with all intel sections
+
+### Offense & Collection
+- ✅ **Payload Builder** — Web UI generates custom DuckyScript for any of 5 payload types with configurable IP/port/delay
+- ✅ **Hashcat Integration** — Auto-extracts NTLMv2 hashes from Responder logs and launches hashcat (`-m 5600`) cracking
+- ✅ **PMKID Capture** — One-click hcxdumptool PMKID attack via Pineapple
+- ✅ **Monitor Mode Management** — airmon-ng monitor mode toggle from dashboard
+- ✅ **Credential Harvesting** — Responder LLMNR/NBT-NS poisoning, Chrome DPAPI exfil, WiFi profile theft
+- ✅ **MITM Suite** — Bettercap ARP spoofing, DNS spoofing, Packet Squirrel inline capture
+- ✅ **SSH Pivot** — LAN Turtle reverse tunnel to `hexbox_ip:2222` for internal access
+- ✅ **Persistent C2** — AutoSSH reverse tunnels via LAN Turtle + Meterpreter module
+
+### Operations
+- ✅ **Loot File Browser** — Download any captured file directly from the dashboard
+- ✅ **Process Management** — Start/stop all background services with whitelist-enforced kill buttons
+- ✅ **Log Viewer** — Real-time log tail for all services with auto-refresh
+- ✅ **"Engage" Button** — Single script launches full assessment with graceful Ctrl+C shutdown
+- ✅ **OPSEC Hardening** — MAC randomization, hostname spoofing, GPG loot encryption, configurable interfaces
 
 ---
 
@@ -190,8 +211,15 @@ rm -rf ~/hexbox/loot
 ln -s /mnt/ssd/loot ~/hexbox/loot
 ```
 
-#### 🔒 Dashboard Authentication (Strongly Recommended)
-The Flask C2 dashboard ships **without authentication** for rapid lab use. Before deploying in any real environment, add Flask-Login or HTTP Basic Auth. Anyone on the management network can currently fire payloads.
+#### 🔒 Dashboard Authentication
+The C2 dashboard is **token-protected by default**. On startup it prints a random access token — set it permanently via environment variable:
+
+```bash
+export HEXBOX_TOKEN="your-strong-secret-here"
+sudo -E python3 ~/hexbox/c2/hexbox_c2.py
+```
+
+Or add `"api_token": "your-token"` to `config.json` under `"hexbox"`. All routes require a valid session or `X-HexBox-Token` header.
 
 ---
 
@@ -219,13 +247,26 @@ This will:
 ```bash
 sudo python3 ~/hexbox/c2/hexbox_c2.py
 ```
-Browse to `http://<pi-ip>:1337`
+Browse to `http://<pi-ip>:1337`. On first launch, the access token is printed to the console. Set `HEXBOX_TOKEN=<token>` to pin it permanently.
 
-The dashboard shows:
-- **Status dots** next to each device — click "Ping Devices" to check reachability
-- **Editable target network** field passed to all scan operations
-- **Background Processes** panel listing running PIDs with inline kill buttons
-- **Stop buttons** next to Responder, Bettercap, and Crack for clean shutdown
+The dashboard has **6 tabs**:
+
+| Tab | Purpose |
+|-----|---------|
+| **Devices** | Control all Hak5 devices, launch Pi-local tools, live activity feed |
+| **Intel** | Parsed NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles |
+| **Payloads** | Build and download custom DuckyScript payloads, deploy to OMG Plug |
+| **Loot** | File browser with one-click download for any captured file |
+| **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, etc.) |
+| **Report** | One-click HTML engagement report generator covering all intel |
+
+### Credential Catcher
+
+Run alongside the dashboard to receive payload callbacks:
+```bash
+python3 ~/hexbox/c2/catcher.py
+```
+Receives: Chrome databases (`/upload`), WiFi profiles (`/wifi`), system info (`/sysinfo`), and serves payloads to devices (`/serve/<name>`).
 
 ### One-Shot Engagement Mode
 ```bash
@@ -257,13 +298,18 @@ hexbox/
 │   ├── configure.sh                 # Interactive one-time configuration
 │   └── install_dependancies.sh      # Install Python deps from requirements.txt
 ├── c2/
-│   ├── hexbox_c2.py                 # Main Flask dashboard
-│   └── catcher.py                   # Chrome DB + WiFi profile exfil receiver
+│   ├── hexbox_c2.py                 # Main Flask C2 dashboard (Phase 3: 6 tabs, SSE, Intel, Reports)
+│   ├── catcher.py                   # Credential receiver: Chrome, WiFi, sysinfo
+│   └── parse_loot.py                # Loot intelligence: hash parsing, nmap XML, WiFi, report gen
 ├── payloads/
 │   ├── reverse_shell.ducky          # OMG: Windows reverse shell
 │   ├── browser_exfil.ducky          # OMG: Chrome credential theft
 │   ├── wifi_steal.ducky             # OMG: WiFi profile dump
+│   ├── sysinfo.ducky                # OMG: Windows system profiling (NEW)
+│   ├── ad_recon.ducky               # OMG: Active Directory enumeration (NEW)
 │   ├── chrome.ps1                   # PowerShell DPAPI exfil stager
+│   ├── sysinfo.ps1                  # System recon: hostname/domain/admins/AV (NEW)
+│   ├── ad_recon.ps1                 # AD enumeration via .NET LDAP (no module required) (NEW)
 │   ├── sharkjack_recon.sh           # Shark Jack auto-recon
 │   ├── squirrel_mitm.sh             # Packet Squirrel transparent MITM
 │   ├── turtle_foothold.sh           # LAN Turtle module provisioning
@@ -300,14 +346,22 @@ hexbox/
 
 ## 🗺️ Roadmap
 
+### Completed
+- ✅ Phase 1: Core C2 dashboard, device control, process management
+- ✅ Phase 2: Config-driven interfaces, parallel status, tabbed dashboard, loot/log APIs, auth, security hardening
+- ✅ Phase 3: SSE live feed, intel engine (hash/WiFi/nmap/sysinfo parsing), payload builder, engagement sessions, hashcat, PMKID, AD recon, HTML report generator
+
+### Upcoming
 - [ ] Bash Bunny payload integration
 - [ ] Flipper Zero serial bridge
 - [ ] Sliver C2 implant generation
-- [ ] Mobile companion app (Android)
-- [ ] BloodHound auto-ingestion module
-- [ ] Custom Evil Portal templates (O365, Okta, Duo)
-- [ ] GPS war-driving mode
-- [ ] Encrypted loot exfil over DNS
+- [ ] BloodHound auto-ingestion (feed AD recon output directly to BloodHound JSON)
+- [ ] Custom Evil Portal templates (O365, Okta, Duo, Google)
+- [ ] PCAP analysis dashboard (tshark protocol/credential stats)
+- [ ] GPS war-driving mode with Kismet integration
+- [ ] Encrypted loot exfil over DNS / HTTPS covert channels
+- [ ] Mobile companion app (read-only Android dashboard)
+- [ ] Cracked password feedback loop (hashcat output back into Intel tab)
 
 ---
 

