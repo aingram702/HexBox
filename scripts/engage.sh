@@ -7,7 +7,7 @@ set -euo pipefail
 
 TARGET_NET=${1:-192.168.1.0/24}
 HEXBOX_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-WIRED_IF=$(python3 -c "import json; c=json.load(open('$HEXBOX_DIR/config.json')); print(c.get('interfaces',{}).get('responder','eth0'))" 2>/dev/null || echo eth0)
+WIRED_IF=$(HEXBOX_CONFIG="$HEXBOX_DIR/config.json" python3 -c "import json,os; c=json.load(open(os.environ['HEXBOX_CONFIG'])); print(c.get('interfaces',{}).get('responder','eth0'))" 2>/dev/null || echo eth0)
 LOOT="$HEXBOX_DIR/loot/engagement_$(date +%s)"
 LOGS="$HEXBOX_DIR/logs"
 PID_FILE="$LOGS/engage.pids"

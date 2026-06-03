@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Secrets / config with real credentials
+# (keep config.json tracked as a template, but ignore overrides)
+config.local.json
+
+# Loot and logs — never commit operational data
+loot/
+logs/
+*.log
+*.pcap
+*.pcapng
+*.cap
+*.hash
+
+# Reports
+loot/reports/
+
+# Engagement sessions (contain target info)
+loot/sessions.json
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -13,7 +13,6 @@
 
 import os
 import sys
-import time
 import socket
 import subprocess
 import requests
@@ -306,8 +305,8 @@ def get_interface_ip(interface):
 def check_internet(host="8.8.8.8", port=53, timeout=3):
     """Check internet connectivity."""
     try:
-        socket.setdefaulttimeout(timeout)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        s = socket.create_connection((host, port), timeout=timeout)
+        s.close()
         return True
     except Exception:
         return False
@@ -837,10 +836,65 @@ def print_summary():
 
 
 # =============================================================================
+# CONFIG BRIDGE — overlay config.json values onto CONFIG dict
+# =============================================================================
+
+def _apply_config_json():
+    """Read config.json (if present) and overlay its values onto CONFIG."""
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
+    cfg_path = os.path.abspath(cfg_path)
+    if not os.path.exists(cfg_path):
+        return
+    try:
+        with open(cfg_path) as f:
+            c = json.load(f)
+    except Exception:
+        return
+
+    hb = c.get("hexbox", {})
+    if hb.get("ip"):
+        CONFIG["hexbox"]["mgmt_ip"] = hb["ip"]
+    if hb.get("dashboard_port"):
+        CONFIG["hexbox"]["dashboard_port"] = hb["dashboard_port"]
+    if hb.get("loot_dir"):
+        CONFIG["hexbox"]["loot_dir"] = os.path.expanduser(hb["loot_dir"])
+    if hb.get("log_dir"):
+        CONFIG["hexbox"]["log_dir"] = os.path.expanduser(hb["log_dir"])
+
+    devmap = {
+        "pineapple":      "pineapple",
+        "sharkjack":      "sharkjack",
+        "packetsquirrel": "squirrel",
+        "lanturtle":      "turtle",
+    }
+    for cfg_key, local_key in devmap.items():
+        dev = c.get("devices", {}).get(cfg_key, {})
+        if dev.get("ip") and local_key in CONFIG:
+            CONFIG[local_key]["ip"] = dev["ip"]
+
+    omg_dev = c.get("devices", {}).get("omgplug", {})
+    if omg_dev.get("ip"):
+        CONFIG["omg"]["callback_ip"] = omg_dev["ip"]
+    if omg_dev.get("pass"):
+        CONFIG["omg"]["wifi_pass"] = omg_dev["pass"]
+
+    ifaces = c.get("interfaces", {})
+    if ifaces.get("management"):
+        CONFIG["hexbox"]["mgmt_interface"] = ifaces["management"]
+
+    c2 = c.get("c2", {})
+    if c2.get("external_ip"):
+        CONFIG["c2"]["external_ip"] = c2["external_ip"]
+    if c2.get("port"):
+        CONFIG["c2"]["external_port"] = c2["port"]
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
 def main():
+    _apply_config_json()
     banner()
 
     print(f"{INFO} Starting preflight checks...")
