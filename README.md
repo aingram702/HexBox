@@ -41,18 +41,20 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 ## 🏗️ Architecture
 
 ```
-                    ┌─────────────────────┐
-                    │   HexBox (Pi 3B)    │
-                    │  Command & Control  │
-                    │   Flask Dashboard   │
-                    └──────────┬──────────┘
-                               │
-        ┌──────────┬───────────┼──────────┬──────────┐
-        │          │           │          │          │
-   ┌────▼───┐ ┌────▼────┐ ┌────▼────┐ ┌──▼───┐ ┌────▼────┐
-   │Pineapple│ │SharkJack│ │Packet   │ │ LAN  │ │ OMG    │
-   │ (WiFi) │ │ (Recon) │ │Squirrel │ │Turtle│ │ Plug   │
-   └────────┘ └─────────┘ └─────────┘ └──────┘ └────────┘
+                    ┌─────────────────────────────┐
+                    │       HexBox (Pi 3B)         │
+                    │    Command & Control Hub     │
+                    │  Flask Dashboard :1337        │
+                    │  Catcher :8000  Sliver :31337 │
+                    └──────────────┬───────────────┘
+                                   │ SSH / Serial / USB
+   ┌──────────┬──────────┬─────────┼──────────┬──────────┬──────────┬──────────┐
+   │          │          │         │          │          │          │          │
+┌──▼──┐  ┌───▼──┐  ┌────▼──┐  ┌───▼──┐  ┌───▼──┐  ┌───▼──┐  ┌────▼──┐  ┌────▼──┐
+│Pine │  │Shark │  │Packet │  │ LAN  │  │ OMG  │  │Bash  │  │Flipper│  │Sliver │
+│apple│  │ Jack │  │Squirrel│  │Turtle│  │ Plug │  │Bunny │  │ Zero  │  │  C2   │
+└─────┘  └──────┘  └───────┘  └──────┘  └──────┘  └──────┘  └───────┘  └───────┘
+  WiFi    Recon      MITM      Pivot      HID     HID+ECM   NFC/RFID   Implants
 ```
 
 ---
@@ -113,6 +115,12 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 - Packet Squirrel (Mark II recommended)
 - LAN Turtle
 - OMG Plug (or OMG Cable / Adapter)
+- **Bash Bunny** (Mark II) — connects at 172.16.64.1 in arming mode
+
+### Phase 4 Add-ons
+- **Flipper Zero** — connected via USB (appears as `/dev/ttyACM0`); requires pyserial (`pip install pyserial`)
+- **Sliver C2** — install on the Pi: `curl https://sliver.sh/install | sudo bash`
+- **BloodHound CE** — install separately; configure URL and credentials in `config.json`
 
 ### Optional but Recommended
 - 3.5" touchscreen HAT (for headless field ops)
@@ -265,11 +273,11 @@ The dashboard has **6 tabs**:
 
 | Tab | Purpose |
 |-----|---------|
-| **Devices** | Control all Hak5 devices, launch Pi-local tools, live activity feed |
-| **Intel** | Parsed NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles |
-| **Payloads** | Build and download custom DuckyScript payloads, deploy to OMG Plug |
+| **Devices** | Control all 7 devices + Pi local tools; Sliver C2 panel; software update; live activity feed |
+| **Intel** | NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles, BloodHound data |
+| **Payloads** | Build and download custom DuckyScript payloads; deploy to OMG Plug |
 | **Loot** | File browser with one-click download for any captured file |
-| **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, etc.) |
+| **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, Sliver, etc.) |
 | **Report** | One-click HTML engagement report generator covering all intel |
 
 ### Credential Catcher
@@ -278,7 +286,14 @@ Run alongside the dashboard to receive payload callbacks:
 ```bash
 python3 ~/hexbox/c2/catcher.py
 ```
-Receives: Chrome databases (`/upload`), WiFi profiles (`/wifi`), system info (`/sysinfo`), and serves payloads to devices (`/serve/<name>`).
+
+| Endpoint | Payload | Description |
+|----------|---------|-------------|
+| `POST /upload` | `browser_exfil.ducky` | Base64 Chrome Login DB |
+| `POST /wifi` | `wifi_steal.ducky` | WiFi profile plaintext dump |
+| `POST /sysinfo` | `sysinfo.ducky` / `ad_recon.ducky` / Bunny | Base64 JSON sysinfo blob |
+| `POST /bloodhound` | `bloodhound_collect.ducky` | Base64 BloodHound v5 JSON |
+| `GET /serve/<name>` | All | Serves payload files to stagers |
 
 ### One-Shot Engagement Mode
 ```bash
@@ -372,15 +387,16 @@ hexbox/
 │   ├── opsec.sh                     # MAC rotation, GPG loot encryption
 │   ├── pineapple_auto.py            # Pineapple REST API automation
 │   └── preflight.py                 # Pre-deployment validation
-├── loot/                            # Captured data lands here
-│   ├── pcaps/
-│   ├── handshakes/
-│   ├── creds/
-│   ├── screenshots/
-│   ├── nmap/
-│   ├── hashes/
-│   ├── exfil/
-│   └── shark/
+├── loot/                            # Captured data lands here (auto-created)
+│   ├── creds/                       # Chrome DBs, WiFi profiles, sysinfo JSON
+│   ├── nmap/                        # Nmap XML + text scan results
+│   ├── handshakes/                  # WPA .cap / .pcapng files
+│   ├── pcaps/                       # Packet Squirrel PCAPs
+│   ├── shark/                       # Shark Jack loot
+│   ├── bunny/                       # Bash Bunny recon output
+│   ├── bloodhound/                  # BloodHound v5 JSON files
+│   ├── implants/                    # Generated Sliver implants
+│   └── reports/                     # Generated HTML engagement reports
 └── logs/                            # Operational logs (c2.log, responder.log, etc.)
 ```
 
@@ -394,6 +410,10 @@ hexbox/
 - Consider routing Pi callbacks through Tor or a VPN for off-site C2
 - DuckyScript payloads are **plaintext on the OMG Plug** — assume they can be recovered if the device is captured
 - `config.json` contains device passwords — do not commit it with real credentials to a public repo
+- Bash Bunny payloads installed via the dashboard are stored **on the device unencrypted** — factory reset if captured
+- Sliver operator config (`~/.sliver/hexbox-operator.cfg`) grants full C2 access — protect the Pi accordingly
+- BloodHound password in `config.json` is plaintext; use `config.local.json` (gitignored) for production credentials
+- Generated Sliver implants in `loot/implants/` are live malware — ensure the Pi is air-gapped or firewalled from untrusted networks
 
 ---
 
