@@ -32,7 +32,7 @@ HexBox turns a Raspberry Pi 3B into a **command-and-control hub** for the follow
 | 🐇 **Bash Bunny** | Multi-mode HID+ECM attacks, switch-selectable payloads |
 | 🐬 **Flipper Zero** | NFC/RFID cloning, Sub-GHz capture, BadUSB — serial bridge |
 
-Also integrates **Sliver C2** (implant generation and session management) and **BloodHound CE** (AD graph auto-ingest).
+Also integrates **Sliver C2** (implant generation and session management), **BloodHound CE** (AD graph auto-ingest), and **Kismet** (GPS war-driving and wireless survey).
 
 All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 
@@ -62,7 +62,7 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 ## 🧰 Features
 
 ### Core Platform
-- ✅ **Unified Web Dashboard** — 6-tab C2 interface: Devices, Intel, Payloads, Loot, Logs, Report
+- ✅ **Unified Web Dashboard** — 7-tab C2 interface: Devices, Intel, Payloads, Loot, Logs, Report, War-Drive
 - ✅ **Token Authentication** — Session-based login with configurable `HEXBOX_TOKEN`; all routes protected
 - ✅ **Real-Time Event Feed** — SSE-powered live activity stream; toast notifications for new loot and process events
 - ✅ **Engagement Sessions** — Named engagement tracking with start time, target, and notes
@@ -76,6 +76,8 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 - ✅ **System Profile Collection** — Captures hostname, domain membership, IPs, local admins, AV products, running processes
 - ✅ **Active Directory Recon** — No-module LDAP enumeration: users, computers, domain admins
 - ✅ **BloodHound Auto-Ingest** — `bloodhound_collect.ps1` builds full BloodHound v5 JSON (users, computers, groups, domains with real SIDs); Intel tab shows summary; one-click upload to BloodHound CE via REST API
+- ✅ **PCAP Analysis Dashboard** — `parse_pcap.py` drives tshark to extract protocol hierarchy, HTTP Basic/form credentials, FTP/SMTP/Telnet cleartext creds, DNS queries, and top IP hosts; results rendered in the Intel tab with per-protocol credential tables
+- ✅ **Evil Portal Credential Capture** — Portal captures (username, password, source portal) displayed in the Intel tab with timestamps; all entries persisted to `loot/portals/captures.json`
 - ✅ **One-Click Report Generator** — Produces a self-contained HTML engagement report with all intel sections
 
 ### Offense & Collection
@@ -90,6 +92,13 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 - ✅ **MITM Suite** — Bettercap ARP spoofing, DNS spoofing, Packet Squirrel inline capture
 - ✅ **SSH Pivot** — LAN Turtle reverse tunnel to `hexbox_ip:2222` for internal access
 - ✅ **Persistent C2** — AutoSSH reverse tunnels via LAN Turtle + Meterpreter module
+
+### Phase 5 — Evil Portal / PCAP / War-Drive
+- ✅ **Custom Evil Portal Templates** — Four pixel-perfect phishing pages: O365, Okta, Duo, Google; configurable catcher IP/port and redirect URL; one-click deploy to WiFi Pineapple `/etc/evilportal/portal.html` via SSH
+- ✅ **Portal Preview & Download** — Preview any portal in-browser or download the customized HTML from the dashboard before deployment
+- ✅ **PCAP Analysis** — Upload `.pcap`/`.pcapng` files to `loot/pcaps/`; dashboard lists them; one-click tshark analysis extracts protocol stats, cleartext credentials (HTTP Basic, FTP, SMTP, Telnet), DNS queries, and top hosts
+- ✅ **GPS War-Drive with Kismet** — Start/stop Kismet from the dashboard; live AP table with SSID, BSSID, channel, signal, encryption, and GPS coordinates; Leaflet.js map with color-coded markers (green=open, red=encrypted); CSV and KML export for external mapping tools
+- ✅ **Kismet Integration** — REST API v2 polling (`/devices/views/phydot11_accesspoints/devices.json`); network cache persisted to `loot/wardrive/networks.json` so export works even when Kismet is offline; encryption decoded from `dot11.advertisedssid.crypt_set` bit flags
 
 ### Operations
 - ✅ **Loot File Browser** — Download any captured file directly from the dashboard
@@ -121,6 +130,11 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 - **Flipper Zero** — connected via USB (appears as `/dev/ttyACM0`); requires pyserial (`pip install pyserial`)
 - **Sliver C2** — install on the Pi: `curl https://sliver.sh/install | sudo bash`
 - **BloodHound CE** — install separately; configure URL and credentials in `config.json`
+
+### Phase 5 Add-ons
+- **Kismet** — wireless survey + GPS war-driving: `sudo apt install kismet`; configure with `kismet_site.conf` and set credentials in `config.json → kismet`
+- **tshark** — PCAP analysis backend: `sudo apt install tshark`; part of the `wireshark-common` package
+- **GPS receiver** (optional) — any USB/serial GPSd-compatible receiver for coordinate logging during war-drives
 
 ### Optional but Recommended
 - 3.5" touchscreen HAT (for headless field ops)
@@ -201,6 +215,11 @@ Edit **`config.json`** in the repo root:
   "sliver":     {"host": "127.0.0.1", "port": 31337},
   "c2": {
     "external_ip": "YOUR.C2.IP.HERE"
+  },
+  "kismet": {
+    "url":      "http://localhost:2501",
+    "username": "kismet",
+    "password": "kismet"
   }
 }
 ```
@@ -269,16 +288,17 @@ sudo python3 ~/hexbox/c2/hexbox_c2.py
 ```
 Browse to `http://<pi-ip>:1337`. On first launch, the access token is printed to the console. Set `HEXBOX_TOKEN=<token>` to pin it permanently.
 
-The dashboard has **6 tabs**:
+The dashboard has **7 tabs**:
 
 | Tab | Purpose |
 |-----|---------|
 | **Devices** | Control all 7 devices + Pi local tools; Sliver C2 panel; software update; live activity feed |
-| **Intel** | NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles, BloodHound data |
-| **Payloads** | Build and download custom DuckyScript payloads; deploy to OMG Plug |
+| **Intel** | NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles, BloodHound data; PCAP analyzer; portal credential captures |
+| **Payloads** | Build and download custom DuckyScript payloads; deploy to OMG Plug; Evil Portal builder with preview, download, and Pineapple deploy |
 | **Loot** | File browser with one-click download for any captured file |
-| **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, Sliver, etc.) |
+| **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, Sliver, Kismet, etc.) |
 | **Report** | One-click HTML engagement report generator covering all intel |
+| **War-Drive** | Kismet controls; live AP table; GPS position bar; interactive Leaflet map; CSV and KML export |
 
 ### Credential Catcher
 
@@ -293,6 +313,7 @@ python3 ~/hexbox/c2/catcher.py
 | `POST /wifi` | `wifi_steal.ducky` | WiFi profile plaintext dump |
 | `POST /sysinfo` | `sysinfo.ducky` / `ad_recon.ducky` / Bunny | Base64 JSON sysinfo blob |
 | `POST /bloodhound` | `bloodhound_collect.ducky` | Base64 BloodHound v5 JSON |
+| `POST /portal` | Evil Portal templates | Phishing credential capture (username/password/portal/host) |
 | `GET /serve/<name>` | All | Serves payload files to stagers |
 
 ### One-Shot Engagement Mode
@@ -349,9 +370,41 @@ From the **Devices → Sliver C2** panel:
 
 Configure BloodHound CE credentials in `config.json → bloodhound`.
 
----
+### Evil Portal Phishing
 
-## 📁 Project Structure
+From the **Payloads → Evil Portal** panel:
+1. Select a template (O365 / Okta / Duo / Google)
+2. Enter your HexBox catcher IP and port (defaults to `10.0.0.99:8000`)
+3. Optionally override the post-submit redirect URL
+4. Click **Preview** to test the portal in your browser, **Download** to get the HTML, or **Deploy to Pineapple** to SSH-push it directly to `/etc/evilportal/portal.html`
+
+Captured credentials appear in **Intel → Portal Captures** with timestamp, portal type, username, and password. All entries are persisted to `loot/portals/captures.json`.
+
+### PCAP Analysis
+
+1. Copy packet captures to `~/hexbox/loot/pcaps/` (`.pcap` or `.pcapng`)
+2. Open the **Intel** tab and scroll to **PCAP Analysis**
+3. Select a file from the dropdown and click **Analyze**
+
+Results show protocol hierarchy, HTTP Basic/form credentials, FTP/SMTP/Telnet cleartext, DNS queries, and top hosts. Requires `tshark`:
+```bash
+sudo apt install tshark
+```
+
+You can also run analysis from the command line:
+```bash
+python3 ~/hexbox/c2/parse_pcap.py loot/pcaps/capture.pcap --json
+```
+
+### GPS War-Drive
+
+1. Plug in a GPS receiver (GPSd-compatible) and start `gpsd`
+2. Start Kismet: click **▶ Start Kismet** in the **War-Drive** tab (or `sudo kismet` manually)
+3. The AP table populates in real time; click **Refresh** to poll Kismet for new networks
+4. GPS coordinates update automatically via the **GPS** bar at the top of the tab
+5. Click **Export CSV** or **Export KML** to download for QGIS / Google Earth
+
+Configure Kismet credentials in `config.json → kismet` (default: `kismet:kismet` at `localhost:2501`).
 
 ```
 hexbox/
@@ -362,10 +415,16 @@ hexbox/
 │   ├── configure.sh                 # Interactive one-time configuration
 │   └── install_dependancies.sh      # Install Python deps from requirements.txt
 ├── c2/
-│   ├── hexbox_c2.py                 # Main Flask C2 dashboard (Phase 4: Bunny, Flipper, Sliver, BloodHound)
-│   ├── catcher.py                   # Credential receiver: Chrome, WiFi, sysinfo, BloodHound JSON
-│   └── parse_loot.py                # Loot intelligence: hash parsing, nmap XML, WiFi, BloodHound, report gen
+│   ├── hexbox_c2.py                 # Main Flask C2 dashboard (Phase 5: Evil Portal, PCAP, Kismet war-drive)
+│   ├── catcher.py                   # Credential receiver: Chrome, WiFi, sysinfo, BloodHound JSON, portal captures
+│   ├── parse_loot.py                # Loot intelligence: hash parsing, nmap XML, WiFi, BloodHound, report gen
+│   └── parse_pcap.py                # PCAP analysis: tshark protocol hierarchy, HTTP/FTP/SMTP/Telnet creds, DNS
 ├── payloads/
+│   ├── portals/
+│   │   ├── o365.html                # Evil Portal: Microsoft O365 phishing template
+│   │   ├── okta.html                # Evil Portal: Okta phishing template
+│   │   ├── duo.html                 # Evil Portal: Duo Security phishing template
+│   │   └── google.html              # Evil Portal: Google phishing template
 │   ├── reverse_shell.ducky          # OMG: Windows reverse shell
 │   ├── browser_exfil.ducky          # OMG: Chrome credential theft
 │   ├── wifi_steal.ducky             # OMG: WiFi profile dump
@@ -391,7 +450,9 @@ hexbox/
 │   ├── creds/                       # Chrome DBs, WiFi profiles, sysinfo JSON
 │   ├── nmap/                        # Nmap XML + text scan results
 │   ├── handshakes/                  # WPA .cap / .pcapng files
-│   ├── pcaps/                       # Packet Squirrel PCAPs
+│   ├── pcaps/                       # Packet Squirrel + tshark analysis PCAPs
+│   ├── portals/                     # Evil Portal credential captures (captures.json)
+│   ├── wardrive/                    # Kismet war-drive data (networks.json cache)
 │   ├── shark/                       # Shark Jack loot
 │   ├── bunny/                       # Bash Bunny recon output
 │   ├── bloodhound/                  # BloodHound v5 JSON files
@@ -414,6 +475,9 @@ hexbox/
 - Sliver operator config (`~/.sliver/hexbox-operator.cfg`) grants full C2 access — protect the Pi accordingly
 - BloodHound password in `config.json` is plaintext; use `config.local.json` (gitignored) for production credentials
 - Generated Sliver implants in `loot/implants/` are live malware — ensure the Pi is air-gapped or firewalled from untrusted networks
+- Evil Portal templates are deployed to the Pineapple in cleartext via SSH — ensure the management network is isolated
+- `loot/portals/captures.json` contains plaintext victim credentials — encrypt loot with `scripts/opsec.sh` before extraction
+- Kismet logs to disk and can fill your SD card quickly during extended war-drives — monitor disk usage with the dashboard log viewer
 
 ---
 
@@ -424,11 +488,9 @@ hexbox/
 - ✅ Phase 2: Config-driven interfaces, parallel status, tabbed dashboard, loot/log APIs, auth, security hardening
 - ✅ Phase 3: SSE live feed, intel engine (hash/WiFi/nmap/sysinfo parsing), payload builder, engagement sessions, hashcat, PMKID, AD recon, HTML report generator
 - ✅ Phase 4: Bash Bunny integration, Flipper Zero serial bridge, Sliver C2 implant generation, BloodHound CE auto-ingest
+- ✅ Phase 5: Custom Evil Portal templates (O365, Okta, Duo, Google), PCAP analysis dashboard (tshark protocol/credential stats), GPS war-driving mode with Kismet integration
 
 ### Upcoming
-- [ ] Custom Evil Portal templates (O365, Okta, Duo, Google)
-- [ ] PCAP analysis dashboard (tshark protocol/credential stats)
-- [ ] GPS war-driving mode with Kismet integration
 - [ ] Encrypted loot exfil over DNS / HTTPS covert channels
 - [ ] Mobile companion app (read-only Android dashboard)
 - [ ] Cracked password feedback loop (hashcat output back into Intel tab)

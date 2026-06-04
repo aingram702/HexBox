@@ -42,6 +42,9 @@ read -rp "[?] Flipper Zero serial port      [/dev/ttyACM0]:    " FLIPPER_PORT
 read -rp "[?] BloodHound CE URL             [http://localhost:8080]: " BH_URL
 read -rp "[?] BloodHound username           [admin]:           " BH_USER
 read -rp "[?] BloodHound password           [BloodHound!]:     " BH_PASS
+read -rp "[?] Kismet URL                    [http://localhost:2501]: " KISMET_URL
+read -rp "[?] Kismet username               [kismet]:          " KISMET_USER
+read -rp "[?] Kismet password               [kismet]:          " KISMET_PASS
 
 HEXBOX_IP=${HEXBOX_IP:-10.0.0.99}
 SCAN_NET=${SCAN_NET:-192.168.1.0/24}
@@ -61,6 +64,9 @@ FLIPPER_PORT=${FLIPPER_PORT:-/dev/ttyACM0}
 BH_URL=${BH_URL:-http://localhost:8080}
 BH_USER=${BH_USER:-admin}
 BH_PASS=${BH_PASS:-BloodHound!}
+KISMET_URL=${KISMET_URL:-http://localhost:2501}
+KISMET_USER=${KISMET_USER:-kismet}
+KISMET_PASS=${KISMET_PASS:-kismet}
 
 # ---- Write config.json via Python (avoids shell injection in passwords) ----
 HEXBOX_CONFIG="$CONFIG" \
@@ -70,6 +76,7 @@ PINE_PASS="$PINE_PASS" SHARK_PASS="$SHARK_PASS" SQ_PASS="$SQ_PASS" \
 TURTLE_PASS="$TURTLE_PASS" OMG_IP="$OMG_IP" OMG_PASS="$OMG_PASS" \
 BUNNY_PASS="$BUNNY_PASS" FLIPPER_PORT="$FLIPPER_PORT" \
 BH_URL="$BH_URL" BH_USER="$BH_USER" BH_PASS="$BH_PASS" \
+KISMET_URL="$KISMET_URL" KISMET_USER="$KISMET_USER" KISMET_PASS="$KISMET_PASS" \
 python3 - <<'PYEOF'
 import json, os
 
@@ -115,6 +122,11 @@ config = {
         "port":          443,
         "tor_enabled":   False,
         "vpn_interface": "tun0",
+    },
+    "kismet": {
+        "url":      e("KISMET_URL",  "http://localhost:2501"),
+        "username": e("KISMET_USER", "kismet"),
+        "password": e("KISMET_PASS", "kismet"),
     },
 }
 with open(os.environ["HEXBOX_CONFIG"], "w") as f:

