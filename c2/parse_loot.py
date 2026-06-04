@@ -411,6 +411,63 @@ def aggregate_bloodhound(loot_dir: Path) -> dict:
     }
 
 
+def parse_cracked_passwords(loot_dir: Path) -> list[dict]:
+    """
+    Parse hashcat cracked-password output files.
+
+    Looks for loot/cracked.txt (produced by hashcat -o).
+    Hashcat appends the plaintext after the last ':' of the hash line.
+
+    NTLMv2 line format:
+        USER::DOMAIN:challenge:NThash:nonce:PLAINTEXT
+    Simple format (MD5/NTLM/etc.):
+        HASH:PLAINTEXT
+    """
+    results: list[dict] = []
+    cracked_file = loot_dir / "cracked.txt"
+    if not cracked_file.exists():
+        return results
+
+    mtime = cracked_file.stat().st_mtime
+    cracked_at = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+
+    for raw_line in cracked_file.read_text(errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # NTLMv2: USER::DOMAIN:challenge:NThash:nonce:plaintext  (7 fields)
+        parts = line.split(":")
+        if len(parts) >= 7 and parts[1] == "":
+            # fields: [0]=user, [1]='', [2]=domain, [3]=challenge, [4]=NThash, [5]=nonce, [6+]=plaintext
+            user      = parts[0]
+            domain    = parts[2]
+            plaintext = ":".join(parts[6:])
+            full_hash = ":".join(parts[:6])
+            results.append({
+                "user":         user,
+                "domain":       domain,
+                "plaintext":    plaintext,
+                "hash_preview": full_hash[:80] + ("…" if len(full_hash) > 80 else ""),
+                "hash_type":    "NTLMv2",
+                "cracked_at":   cracked_at,
+            })
+        elif len(parts) >= 2:
+            # Simple HASH:plaintext
+            hash_val  = parts[0]
+            plaintext = ":".join(parts[1:])
+            results.append({
+                "user":         "",
+                "domain":       "",
+                "plaintext":    plaintext,
+                "hash_preview": hash_val[:80] + ("…" if len(hash_val) > 80 else ""),
+                "hash_type":    "hash",
+                "cracked_at":   cracked_at,
+            })
+
+    return results
+
+
 def _ip_sort_key(ip: str) -> tuple:
     try:
         return tuple(int(x) for x in ip.split("."))

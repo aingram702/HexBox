@@ -46,6 +46,14 @@ read -rp "[?] Kismet URL                    [http://localhost:2501]: " KISMET_UR
 read -rp "[?] Kismet username               [kismet]:          " KISMET_USER
 read -rp "[?] Kismet password               [kismet]:          " KISMET_PASS
 
+echo ""
+echo "  Covert exfil channels (leave blank to disable):"
+read -rp "[?] DNS exfil domain              []:                " EXFIL_DNS_DOMAIN
+read -rp "[?] DNS exfil server IP           [8.8.8.8]:         " EXFIL_DNS_SERVER
+read -rp "[?] HTTPS exfil endpoint URL      []:                " EXFIL_HTTPS_URL
+read -rp "[?] HTTPS exfil auth token        []:                " EXFIL_HTTPS_TOKEN
+read -rp "[?] AES exfil key (32+ chars)     [change-me-to-32-byte-secret-key!]: " EXFIL_AES_KEY
+
 HEXBOX_IP=${HEXBOX_IP:-10.0.0.99}
 SCAN_NET=${SCAN_NET:-192.168.1.0/24}
 C2_IP=${C2_IP:-YOUR.C2.IP.HERE}
@@ -67,6 +75,11 @@ BH_PASS=${BH_PASS:-BloodHound!}
 KISMET_URL=${KISMET_URL:-http://localhost:2501}
 KISMET_USER=${KISMET_USER:-kismet}
 KISMET_PASS=${KISMET_PASS:-kismet}
+EXFIL_DNS_DOMAIN=${EXFIL_DNS_DOMAIN:-}
+EXFIL_DNS_SERVER=${EXFIL_DNS_SERVER:-8.8.8.8}
+EXFIL_HTTPS_URL=${EXFIL_HTTPS_URL:-}
+EXFIL_HTTPS_TOKEN=${EXFIL_HTTPS_TOKEN:-}
+EXFIL_AES_KEY=${EXFIL_AES_KEY:-change-me-to-32-byte-secret-key!}
 
 # ---- Write config.json via Python (avoids shell injection in passwords) ----
 HEXBOX_CONFIG="$CONFIG" \
@@ -77,6 +90,9 @@ TURTLE_PASS="$TURTLE_PASS" OMG_IP="$OMG_IP" OMG_PASS="$OMG_PASS" \
 BUNNY_PASS="$BUNNY_PASS" FLIPPER_PORT="$FLIPPER_PORT" \
 BH_URL="$BH_URL" BH_USER="$BH_USER" BH_PASS="$BH_PASS" \
 KISMET_URL="$KISMET_URL" KISMET_USER="$KISMET_USER" KISMET_PASS="$KISMET_PASS" \
+EXFIL_DNS_DOMAIN="$EXFIL_DNS_DOMAIN" EXFIL_DNS_SERVER="$EXFIL_DNS_SERVER" \
+EXFIL_HTTPS_URL="$EXFIL_HTTPS_URL" EXFIL_HTTPS_TOKEN="$EXFIL_HTTPS_TOKEN" \
+EXFIL_AES_KEY="$EXFIL_AES_KEY" \
 python3 - <<'PYEOF'
 import json, os
 
@@ -127,6 +143,14 @@ config = {
         "url":      e("KISMET_URL",  "http://localhost:2501"),
         "username": e("KISMET_USER", "kismet"),
         "password": e("KISMET_PASS", "kismet"),
+    },
+    "exfil": {
+        "dns_domain":      e("EXFIL_DNS_DOMAIN",  ""),
+        "dns_server":      e("EXFIL_DNS_SERVER",   "8.8.8.8"),
+        "https_url":       e("EXFIL_HTTPS_URL",    ""),
+        "https_token":     e("EXFIL_HTTPS_TOKEN",  ""),
+        "aes_key":         e("EXFIL_AES_KEY",      "change-me-to-32-byte-secret-key!"),
+        "https_verify_tls": True,
     },
 }
 with open(os.environ["HEXBOX_CONFIG"], "w") as f:

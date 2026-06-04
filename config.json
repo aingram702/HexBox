@@ -69,5 +69,13 @@
     "url":      "http://localhost:2501",
     "username": "kismet",
     "password": "kismet"
+  },
+  "exfil": {
+    "dns_domain":      "",
+    "dns_server":      "8.8.8.8",
+    "https_url":       "",
+    "https_token":     "",
+    "aes_key":         "change-me-to-32-byte-secret-key!",
+    "https_verify_tls": true
   }
 }
