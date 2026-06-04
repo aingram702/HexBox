@@ -431,9 +431,12 @@ def parse_cracked_passwords(loot_dir: Path) -> list[dict]:
     mtime = cracked_file.stat().st_mtime
     cracked_at = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
 
+    _MAX_RESULTS = 10_000
     for raw_line in cracked_file.read_text(errors="replace").splitlines():
+        if len(results) >= _MAX_RESULTS:
+            break
         line = raw_line.strip()
-        if not line:
+        if not line or len(line) > 4096:  # skip absurdly long lines
             continue
 
         # NTLMv2: USER::DOMAIN:challenge:NThash:nonce:plaintext  (7 fields)
