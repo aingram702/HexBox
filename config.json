@@ -64,5 +64,10 @@
     "port":          443,
     "tor_enabled":   false,
     "vpn_interface": "tun0"
+  },
+  "kismet": {
+    "url":      "http://localhost:2501",
+    "username": "kismet",
+    "password": "kismet"
   }
 }

