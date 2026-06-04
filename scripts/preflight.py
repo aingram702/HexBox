@@ -21,6 +21,18 @@ import shutil
 from datetime import datetime
 from colorama import Fore, Back, Style, init
 
+
+def _detect_pi_model() -> str:
+    """Return the Raspberry Pi model string, or 'Unknown' if not detectable."""
+    try:
+        with open("/proc/device-tree/model", "rb") as f:
+            return f.read().rstrip(b"\x00").decode("utf-8", errors="replace")
+    except Exception:
+        return "Unknown"
+
+
+PI_MODEL = _detect_pi_model()
+
 # =============================================================================
 # !! CONFIGURATION - EDIT THESE BEFORE DEPLOYMENT !!
 # =============================================================================
@@ -46,7 +58,7 @@ CONFIG = {
         "port":             1471,                  # Pineapple web UI port
         "api_port":         1471,
         "api_key":          "YOUR_PINEAPPLE_API_KEY",  # !! SET YOUR API KEY !!
-        "interface":        "wlan1",               # Pi interface facing Pineapple
+        "interface":        "wlan0",               # Pi interface facing Pineapple (wlan0 on Pi 3/4/5)
         "ssid":             "HexBox-Pine",         # Management SSID
     },
 
@@ -180,14 +192,15 @@ def banner():
 {Fore.RED}
 ██╗  ██╗███████╗██╗  ██╗██████╗  ██████╗ ██╗  ██╗
 ██║  ██║██╔════╝╚██╗██╔╝██╔══██╗██╔═══██╗╚██╗██╔╝
-███████║█████╗   ╚███╔╝ ██████╔╝██║   ██║ ╚███╔╝ 
-██╔══██║██╔══╝   ██╔██╗ ██╔══██╗██║   ██║ ██╔██╗ 
+███████║█████╗   ╚███╔╝ ██████╔╝██║   ██║ ╚███╔╝
+██╔══██║██╔══╝   ██╔██╗ ██╔══██╗██║   ██║ ██╔██╗
 ██║  ██║███████╗██╔╝ ██╗██████╔╝╚██████╔╝██╔╝ ██╗
 ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
 {Style.RESET_ALL}
 {Fore.WHITE}         PRE-FLIGHT VALIDATION SYSTEM{Style.RESET_ALL}
 {Fore.RED}         !! AUTHORIZED USE ONLY !!{Style.RESET_ALL}
 {Fore.WHITE}         {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}
+{Fore.CYAN}         Hardware: {PI_MODEL}{Style.RESET_ALL}
     """)
 
 
@@ -881,6 +894,7 @@ def _apply_config_json():
     ifaces = c.get("interfaces", {})
     if ifaces.get("management"):
         CONFIG["hexbox"]["mgmt_interface"] = ifaces["management"]
+        CONFIG["pineapple"]["interface"] = ifaces["management"]
 
     c2 = c.get("c2", {})
     if c2.get("external_ip"):
@@ -893,6 +907,42 @@ def _apply_config_json():
 # MAIN
 # =============================================================================
 
+def check_hardware():
+    section("HARDWARE PLATFORM")
+
+    if "Raspberry Pi" in PI_MODEL:
+        log_result("PASS", f"Raspberry Pi detected", PI_MODEL)
+    else:
+        log_result("WARN", f"Non-Pi hardware", f"Detected: {PI_MODEL} — untested platform")
+
+    # Pi 5: warn if usb_max_current_enable is not set
+    if "Raspberry Pi 5" in PI_MODEL:
+        boot_cfg = ("/boot/firmware/config.txt"
+                    if os.path.exists("/boot/firmware/config.txt")
+                    else "/boot/config.txt")
+        try:
+            txt = open(boot_cfg).read()
+            if "usb_max_current_enable=1" in txt:
+                log_result("PASS", "Pi 5: usb_max_current_enable=1 set",
+                           f"in {boot_cfg}")
+            else:
+                log_result("WARN", "Pi 5: usb_max_current_enable not set",
+                           f"Run setup/hexbox_setup.sh or add to {boot_cfg}; "
+                           "requires 27W (5V/5A) USB-C supply")
+        except Exception:
+            log_result("WARN", "Pi 5: could not read boot config",
+                       f"Manually verify {boot_cfg}")
+
+    # Pi 4/5: rpi-eeprom should be installed
+    if any(m in PI_MODEL for m in ("Raspberry Pi 4", "Raspberry Pi 5")):
+        import shutil as _sh
+        if _sh.which("rpi-eeprom-update"):
+            log_result("PASS", "rpi-eeprom installed (Pi 4/5)")
+        else:
+            log_result("WARN", "rpi-eeprom not installed",
+                       "sudo apt install rpi-eeprom")
+
+
 def main():
     _apply_config_json()
     banner()
@@ -902,6 +952,7 @@ def main():
 
     # Run all checks
     check_root()
+    check_hardware()
     check_config_placeholders()
     check_loot_dirs()
     check_tools_installed()
