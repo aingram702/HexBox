@@ -10,9 +10,23 @@ HEXBOX_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$HEXBOX_DIR/config.json"
 PAYLOADS="$HEXBOX_DIR/payloads"
 
+# ── Detect hardware and OS for context-aware prompts ──────────────────────────
+PI_MODEL=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "Unknown")
+OS_CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-unknown}" || echo "unknown")
+
 echo "╔══════════════════════════════════════════════╗"
 echo "║       HexBox — One-Time Configuration        ║"
 echo "╚══════════════════════════════════════════════╝"
+echo ""
+echo "  Hardware : $PI_MODEL"
+echo "  OS       : Raspberry Pi OS $OS_CODENAME"
+
+if echo "$PI_MODEL" | grep -q "Raspberry Pi 5"; then
+    echo "  [!] Pi 5: requires 27W (5V/5A) USB-C supply for full device operation"
+elif echo "$PI_MODEL" | grep -q "Raspberry Pi 4"; then
+    echo "  [!] Pi 4: requires 15W (5V/3A) USB-C supply"
+fi
+
 echo ""
 echo "  Leave any field blank to keep the default shown in [brackets]."
 echo ""
@@ -23,7 +37,13 @@ read -rp "[?] Default scan target subnet    [192.168.1.0/24]:  " SCAN_NET
 read -rp "[?] C2 external server IP         [YOUR.C2.IP.HERE]: " C2_IP
 
 echo ""
-echo "  Network interfaces (run 'ip link' to list yours):"
+echo "  Network interfaces (detected on this device):"
+ip link show 2>/dev/null \
+    | grep -E "^[0-9]+:" \
+    | awk -F': ' '{split($2,a,"@"); print "    " a[1]}' \
+    | grep -v "^    lo$" \
+    || echo "    (could not detect — run 'ip link' manually)"
+echo ""
 read -rp "[?] Management / bettercap iface  [wlan0]:           " MGMT_IF
 read -rp "[?] Responder / wired iface       [eth0]:            " WIRED_IF
 read -rp "[?] Public IP for Turtle AutoSSH  [<YOUR_HEXBOX_PUBLIC_IP>]: " TURTLE_IP
@@ -169,7 +189,12 @@ if [ "$HEXBOX_IP" != "$OLD_IP" ]; then
     for f in "$PAYLOADS"/*.ducky "$PAYLOADS"/*.ps1 "$PAYLOADS"/*.sh; do
         [ -f "$f" ] || continue
         if grep -q "$OLD_IP" "$f" 2>/dev/null; then
-            sed -i "s|$OLD_IP|$HEXBOX_IP|g" "$f"
+            python3 -c "
+import sys
+old, new, path = sys.argv[1], sys.argv[2], sys.argv[3]
+data = open(path, encoding='utf-8', errors='replace').read()
+open(path, 'w', encoding='utf-8').write(data.replace(old, new))
+" "$OLD_IP" "$HEXBOX_IP" "$f"
             echo "    Updated: $(basename "$f")"
         fi
     done

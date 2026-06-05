@@ -5,11 +5,11 @@
 ![HexBox Banner](/images/hexbox-banner.png)
 
 [![Status](https://img.shields.io/badge/status-operational-brightgreen)](https://github.com/aingram702/hexbox)
-[![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%203B-c51a4a)](https://www.raspberrypi.com/)
+[![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%203B%20%7C%204%20%7C%205-c51a4a)](https://www.raspberrypi.com/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Authorized%20Use%20Only-black)](#license)
 
-HexBox is a portable, self-contained offensive security platform that turns a **Raspberry Pi 3B** into a full-spectrum red team command center. It orchestrates an arsenal of Hak5 attack hardware — WiFi Pineapple, Bash Bunny, LAN Turtle, OMG Plug, and more — through a single authenticated web dashboard, streaming captured intelligence in real time and enabling covert exfiltration from any network position.
+HexBox is a portable, self-contained offensive security platform that turns a **Raspberry Pi 3B, 4, or 5** into a full-spectrum red team command center. It orchestrates an arsenal of Hak5 attack hardware — WiFi Pineapple, Bash Bunny, LAN Turtle, OMG Plug, and more — through a single authenticated web dashboard, streaming captured intelligence in real time and enabling covert exfiltration from any network position.
 
 Drop it in a backpack. Plug it in. Own the engagement.
 
@@ -69,7 +69,7 @@ Also integrates: **Sliver C2** (implant generation + session management), **Bloo
 
 ```
                         ┌───────────────────────────────────┐
-                        │          HexBox (Pi 3B)            │
+                        │      HexBox (Pi 3B / 4 / 5)        │
                         │                                   │
                         │  Flask C2 Dashboard  :1337        │
                         │  Credential Catcher  :8000        │
@@ -157,13 +157,27 @@ hashcat          ──(cracked.txt)──▶  SSE event ──▶  Cracked Pass
 
 ## 📦 Hardware Requirements
 
+### Supported Raspberry Pi Models
+
+HexBox runs on Raspberry Pi 3B, 4, and 5 with Raspberry Pi OS Bullseye or Bookworm.
+
+| Model | CPU | RAM | USB | Ethernet | WiFi | Power Required | Notes |
+|-------|-----|-----|-----|----------|------|----------------|-------|
+| **Pi 3B / 3B+** | Cortex-A53 1.2–1.4GHz | 1GB | USB 2.0 | 100Mbps | 2.4GHz only | 5V/2.5A (13W) Micro-USB | Minimum spec; sufficient for all features |
+| **Pi 4** (recommended) | Cortex-A72 1.8GHz | 2/4/8GB | USB 3.0 + 2.0 | Gigabit | 2.4 + 5GHz | 5V/3A (15W) USB-C | Faster hashcat; USB 3.0 for quicker loot pulls |
+| **Pi 5** (best performance) | Cortex-A76 2.4GHz | 4/8GB | USB 3.0 + 2.0 | Gigabit | 2.4 + 5GHz | **5V/5A (27W) USB-C** | Fastest; NVMe support via M.2 HAT; see Pi 5 notes below |
+
+> **Pi 5 requirement:** A genuine 27W (5V/5A) USB-C supply is mandatory when running multiple Hak5 devices. With a 15W supply, the Pi 5 automatically limits USB ports to 600mA — insufficient to power the Hak5 ecosystem. Run `setup/hexbox_setup.sh` to enable `usb_max_current_enable=1` automatically.
+
+> **Interface naming:** Raspberry Pi OS uses `eth0` and `wlan0` on all three models by default. Predictable naming (e.g. `end0`, `wlx*`) is disabled unless you enable it via `raspi-config`.
+
 ### Core (Required)
 
 | Component | Notes |
 |-----------|-------|
-| **Raspberry Pi 3B** (or 3B+/4) | The hub — runs all C2 software |
-| **64GB+ Class 10 microSD** | Faster cards improve tshark and hashcat I/O |
-| **20,000 mAh USB-C power bank** | ~8–10 hour runtime in the field |
+| **Raspberry Pi 3B, 4, or 5** | The hub — runs all C2 software |
+| **64GB+ Class 10 microSD** | Faster cards (A2-rated) improve tshark and hashcat I/O |
+| **Power bank** (see table above for model requirement) | ~8–10 hour runtime in the field; Pi 5 needs a 27W-capable bank |
 | **Powered USB hub** (4+ ports, 2A/port) | Required — Pi USB ports can't power Hak5 devices simultaneously |
 | **USB-to-Ethernet adapter** | The Pi's onboard NIC is used for management; a second NIC handles Responder/MITM |
 
@@ -190,6 +204,18 @@ hashcat          ──(cracked.txt)──▶  SSE event ──▶  Cracked Pass
 
 ## 💾 Software Requirements
 
+### Raspberry Pi OS Version
+
+| OS Release | Status | Python | pip notes |
+|------------|--------|--------|-----------|
+| **Bookworm** (Pi OS 12, current default) | ✅ Fully supported | 3.11 | Requires `python3-full`; uses `--break-system-packages` |
+| **Bullseye** (Pi OS 11) | ✅ Fully supported | 3.9 | Standard pip install |
+| Buster or older | ⚠️ Not tested | 3.7 | Dependency versions may conflict |
+
+`setup/hexbox_setup.sh` automatically detects the OS and installs the correct extras.
+
+### Required Tools
+
 | Tool | Install | Required for |
 |------|---------|--------------|
 | Python 3.9+ | included on Pi OS | All C2 components |
@@ -215,30 +241,38 @@ flask  paramiko  requests  pycryptodome  scapy  impacket  netaddr  colorama
 
 ## 🚀 Quick Start
 
+Works on Raspberry Pi 3B, 4, and 5. Use **Raspberry Pi OS Lite (64-bit)** — Bullseye or Bookworm.
+
 ```bash
 # 1. Flash Raspberry Pi OS Lite (64-bit) to your SD card via Raspberry Pi Imager
-#    Enable SSH in the imager's advanced options before writing.
+#    Enable SSH and set a hostname in the imager's Advanced Options before writing.
+#    Pi 5 tip: an A2-rated microSD or NVMe via M.2 HAT significantly speeds up hashcat.
 
 # 2. Boot the Pi and SSH in
 ssh pi@<pi-ip>
 
-# 3. Clone and provision
+# 3. Clone and provision  (auto-detects Pi model and OS version)
 git clone https://github.com/aingram702/hexbox.git ~/hexbox
 cd ~/hexbox
 chmod +x setup/hexbox_setup.sh
-sudo ./setup/hexbox_setup.sh   # installs all tools + Python deps
+sudo bash setup/hexbox_setup.sh   # installs all tools + Python deps
+#   Pi 5: also sets usb_max_current_enable=1 and installs rpi-eeprom
+#   Bookworm: also installs python3-full
 
-# 4. Configure for your environment (one-time interactive setup)
-bash setup/configure.sh
+# 4. Reboot to apply MAC spoof service and USB current settings
+sudo reboot
 
-# 5. Pre-flight check
+# 5. Configure for your environment (one-time interactive setup)
+bash setup/configure.sh   # shows detected interfaces and Pi model
+
+# 6. Pre-flight check
 sudo python3 scripts/preflight.py
 
-# 6. Launch
+# 7. Launch
 sudo python3 ~/hexbox/c2/hexbox_c2.py &    # C2 dashboard  → :1337
 python3 ~/hexbox/c2/catcher.py &           # Catcher server → :8000
 
-# 7. Open dashboard
+# 8. Open dashboard
 http://<pi-ip>:1337
 ```
 
@@ -729,13 +763,54 @@ The status check is a TCP connect to the device's SSH port. If the device is con
 
 ### hashcat fails / no GPU
 
-Hashcat will fall back to CPU on the Pi (slow). For faster cracking:
+Hashcat runs in CPU-only mode on all Pi models — GPU acceleration is not available.
+Pi 5 (Cortex-A76) cracks roughly 3× faster than a Pi 3B. For best performance, offload to a dedicated GPU machine:
 ```bash
 # Copy hashes to a machine with a GPU, crack there, copy cracked.txt back
 scp pi@<pi-ip>:~/hexbox/loot/ntlmv2_hashes.txt .
 hashcat -m 5600 ntlmv2_hashes.txt /usr/share/wordlists/rockyou.txt -o cracked.txt
 scp cracked.txt pi@<pi-ip>:~/hexbox/loot/
 # Dashboard detects the file change and updates Intel → Cracked Passwords automatically
+```
+
+### Pi 5: USB devices not detected / underpowered
+
+Pi 5 limits USB power to 600mA/port when using a 15W supply. Symptoms: Hak5 devices
+show offline immediately, USB NICs don't enumerate, Flipper Zero drops connection.
+
+```bash
+# Verify usb_max_current_enable is set
+grep usb_max_current /boot/firmware/config.txt
+# Should show: usb_max_current_enable=1
+# If missing, run: sudo bash setup/hexbox_setup.sh  (safe to re-run)
+# Then: sudo reboot
+# ALSO: confirm your power supply is rated 27W (5V/5A) — a 15W supply
+# cannot deliver enough current even with this flag set.
+```
+
+### Pi 5: Flipper Zero not detected on /dev/ttyACM0
+
+The Pi 5 with Raspberry Pi OS Bookworm has known quirks with USB CDC-ACM devices.
+```bash
+# Check if the device appears at all
+lsusb | grep Flipper
+ls /dev/ttyACM* /dev/ttyUSB*
+
+# If it doesn't appear, try a different USB port or USB hub
+# Check kernel messages for enumeration errors
+dmesg | tail -20
+
+# If using a USB hub, ensure the hub is USB 2.0 (ACM quirks with USB 3.0 hubs)
+# Update config.json flipper.serial_port if the device appears at a different path
+```
+
+### Bookworm: pip install fails with "externally managed"
+
+```bash
+# Install python3-full (run as root)
+sudo apt install -y python3-full
+# Then retry
+pip3 install --break-system-packages -r requirements.txt
 ```
 
 ### Kismet no networks / GPS not updating
@@ -797,6 +872,7 @@ sudo python3 scripts/preflight.py
 | **Phase 4** | Bash Bunny SSH integration, Flipper Zero serial bridge, Sliver C2 implant generation, BloodHound CE auto-ingest |
 | **Phase 5** | Custom Evil Portal templates (O365/Okta/Duo/Google), PCAP analysis dashboard, GPS war-driving with Kismet, Leaflet map, CSV/KML export |
 | **Phase 6** | AES-256-GCM encrypted exfil over DNS subdomains and HTTPS, Mobile PWA companion app, hashcat cracked password feedback loop, full security audit + remediation |
+| **Phase 7** | Raspberry Pi 4 and 5 compatibility: model-aware setup script, Bookworm support, dynamic MAC spoof service, Pi 5 USB current unlock, updated preflight hardware checks |
 
 ### Upcoming
 

@@ -3,7 +3,7 @@
 
 from flask import Flask, request, send_file
 from pathlib import Path
-import base64, binascii, json, os, re
+import base64, binascii, fcntl, json, os, re
 from datetime import datetime
 
 app = Flask(__name__)
@@ -120,14 +120,18 @@ def portal_capture():
     }
     dest = LOOT / "portals" / "captures.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    captures: list = []
-    if dest.exists():
+    with open(dest, "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        raw = f.read()
         try:
-            captures = json.loads(dest.read_text())
-        except (json.JSONDecodeError, OSError):
+            captures = json.loads(raw) if raw.strip() else []
+        except json.JSONDecodeError:
             captures = []
-    captures.append(entry)
-    dest.write_text(json.dumps(captures, indent=2))
+        captures.append(entry)
+        f.seek(0)
+        f.truncate()
+        f.write(json.dumps(captures, indent=2))
     print(f"[+] Portal capture: {portal} / {username} from {host}")
     return "OK"
 
@@ -136,7 +140,11 @@ def portal_capture():
 def serve_file(name: str):
     """Serve a payload file so DuckyScript payloads can download it."""
     safe = Path(name).name
-    path = PAYLOADS / safe
+    path = (PAYLOADS / safe).resolve()
+    try:
+        path.relative_to(PAYLOADS.resolve())
+    except ValueError:
+        return "Not found", 404
     if path.is_file():
         return send_file(str(path))
     return "Not found", 404

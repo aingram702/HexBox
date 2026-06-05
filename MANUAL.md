@@ -1,7 +1,8 @@
 # HexBox Software Manual
 
-**Version:** Phase 6  
-**Platform:** Raspberry Pi 3B  
+**Version:** Phase 7  
+**Platform:** Raspberry Pi 3B / 4 / 5  
+**OS:** Raspberry Pi OS Bullseye or Bookworm (64-bit)  
 **Classification:** Authorized Penetration Testing Use Only
 
 ---
@@ -162,13 +163,47 @@ Target Machine                 HexBox                        Attacker
 
 ## 3. Hardware Requirements
 
-### Core Platform
+### Supported Raspberry Pi Models
+
+HexBox is fully compatible with Raspberry Pi 3B, 4, and 5. The setup script
+auto-detects the model and applies model-specific configuration.
+
+| Model | CPU | RAM | USB | WiFi | Power Supply | Key Advantage |
+|---|---|---|---|---|---|---|
+| **Pi 3B / 3B+** | Cortex-A53 1.2–1.4GHz | 1GB | USB 2.0 only | 2.4GHz only | 5V/2.5A Micro-USB | Lowest cost; sufficient for all features |
+| **Pi 4** | Cortex-A72 1.5–1.8GHz | 2/4/8GB | USB 3.0 + 2.0 | 2.4 + 5GHz | **5V/3A (15W) USB-C** | Faster CPU cracking; true GbE; USB 3.0 |
+| **Pi 5** | Cortex-A76 2.4GHz | 4/8GB | USB 3.0 + 2.0 | 2.4 + 5GHz | **5V/5A (27W) USB-C** | Fastest CPU; NVMe boot; PCIe Gen 2 |
+
+#### Pi 5 Critical Notes
+
+- **Power supply is mandatory:** The Pi 5 requires a genuine 27W (5V/5A) USB-C supply. Running with a standard 15W supply automatically throttles all USB ports to 600mA — not enough to power Hak5 devices. The setup script enables `usb_max_current_enable=1` in `/boot/firmware/config.txt` to unlock full current, but this only works with the correct supply.
+- **Boot config path changed:** Pi 5 uses `/boot/firmware/config.txt` instead of `/boot/config.txt`. All HexBox scripts detect this automatically.
+- **Flipper Zero on Bookworm:** USB CDC-ACM enumeration (`/dev/ttyACM0`) has known quirks on Pi 5 Bookworm. Test connectivity before deployment. If the device appears at a different path, update `config.json → flipper.serial_port`.
+
+#### Pi 4 Notes
+
+- USB 3.0 ports (blue) deliver faster loot transfers from Hak5 devices — always plug Shark Jack and Bash Bunny into blue ports.
+- Dual-band WiFi (2.4 + 5GHz) enables 5GHz monitoring with a compatible external adapter.
+- Requires `rpi-eeprom` for firmware updates — installed automatically by setup script.
+
+### Interface Naming
+
+On all Pi models, **Raspberry Pi OS** uses traditional interface names by default:
+- Built-in Ethernet → `eth0`
+- Built-in WiFi → `wlan0`
+- USB Ethernet adapters → `eth1`, `eth2`, etc. (or `enx<mac>` if predictable names are enabled)
+
+Predictable naming (e.g. `end0`, `wlp*`) is disabled by default. If a user enables it via
+`raspi-config → Advanced → Network Interface Names`, `configure.sh` will show the actual
+interface list and prompt for the correct names.
+
+### Core Platform (Required)
 
 | Component | Specification | Notes |
 |---|---|---|
-| Raspberry Pi 3B | ARM Cortex-A53 1.2GHz, 1GB RAM | Pi 3B+ also supported |
-| MicroSD Card | 64GB Class 10 (A1 rated) | Raspberry Pi OS Lite (64-bit) |
-| USB Battery Pack | 20,000mAh, dual 5V/2.4A output | Powers Pi + USB hub simultaneously |
+| Raspberry Pi 3B, 4, or 5 | See model table above | Pi 4 or 5 recommended |
+| MicroSD Card | 64GB Class 10 A2-rated | Raspberry Pi OS Lite (64-bit); Pi 5 also supports NVMe |
+| USB Battery Pack | 20,000mAh+ (see power table) | Pi 5 needs a 27W-capable bank |
 | Powered USB Hub | 4+ port, 5V/2A per port | Required; Hak5 devices draw significant current |
 | USB Ethernet Adapter | USB 3.0 Gigabit preferred | Pi has only one built-in NIC |
 
@@ -194,6 +229,16 @@ Target Machine                 HexBox                        Attacker
 ---
 
 ## 4. Software Requirements
+
+### Raspberry Pi OS Compatibility
+
+| OS Release | Codename | Python | pip Method | Status |
+|---|---|---|---|---|
+| Raspberry Pi OS 12 | **Bookworm** (current default) | 3.11 | `pip3 install --break-system-packages` after installing `python3-full` | ✅ Fully supported |
+| Raspberry Pi OS 11 | **Bullseye** | 3.9 | `pip3 install` standard | ✅ Fully supported |
+| Raspberry Pi OS 10 | Buster | 3.7 | — | ⚠️ Not tested; dependency versions may conflict |
+
+`setup/hexbox_setup.sh` detects the OS codename and installs `python3-full` automatically on Bookworm.
 
 ### Python Dependencies (`requirements.txt`)
 
@@ -232,9 +277,13 @@ Target Machine                 HexBox                        Attacker
 ```bash
 # Download Raspberry Pi OS Lite (64-bit) from raspberrypi.com/software
 # Flash with Raspberry Pi Imager; enable SSH and set hostname in Advanced Options
+# Use Bookworm (current default) or Bullseye — both are supported
 # Boot the Pi and SSH in:
 ssh pi@<pi-ip>
 ```
+
+> **Pi 5 tip:** An A2-rated microSD or NVMe drive (via M.2 HAT) significantly improves
+> hashcat and tshark I/O performance compared to a standard A1 card.
 
 ### Step 2 — Clone Repository
 
@@ -246,19 +295,33 @@ cd ~/hexbox
 ### Step 3 — Run System Setup
 
 ```bash
+# Auto-detects Pi model (3B/4/5) and OS (Bullseye/Bookworm)
 # Installs all system tools, Python deps, configures IP forwarding,
 # creates loot/log directories, installs MAC spoof systemd service
 sudo bash setup/hexbox_setup.sh
 ```
 
 This script performs:
-- `apt update && apt upgrade`
+- Detects Pi model from `/proc/device-tree/model`
+- Detects OS codename from `/etc/os-release`
+- Detects boot config path (`/boot/config.txt` or `/boot/firmware/config.txt`)
+- `apt update && apt full-upgrade`
 - Installs all tools listed in Section 4
+- **Bookworm only:** installs `python3-full` (required for `--break-system-packages`)
+- **Pi 4/5:** installs `rpi-eeprom` for firmware management
+- **Pi 5 only:** appends `usb_max_current_enable=1` to boot config (requires reboot + 27W supply)
 - Installs Metasploit via rapid7 omnibus installer
-- Installs Sliver C2 via the official install script
 - Creates `~/hexbox/loot/` subdirectory tree
 - Enables `net.ipv4.ip_forward=1` in `/etc/sysctl.conf`
-- Installs and enables `macspoof.service` systemd unit
+- Installs and enables `macspoof.service` (dynamic interface enumeration — works on Pi 3, 4, and 5)
+
+### Step 3b — Reboot (Pi 5 and Pi 4 Recommended)
+
+```bash
+sudo reboot
+# Pi 5: required to apply usb_max_current_enable=1 and updated EEPROM settings
+# All models: ensures macspoof.service runs on the next boot
+```
 
 ### Step 4 — Install Python Dependencies
 
@@ -456,6 +519,7 @@ It must be executed as root (`sudo python3 scripts/preflight.py`).
 | Section | What It Verifies |
 |---|---|
 | Permissions | Running as root |
+| **Hardware Platform** | Pi model detected; Pi 5: `usb_max_current_enable` set; Pi 4/5: `rpi-eeprom` installed |
 | Configuration | No placeholder values remain in config |
 | Loot Directories | All subdirectories exist and are writable |
 | Required Tools | nmap, responder, hashcat, gpg, macchanger, etc. |
@@ -1545,6 +1609,27 @@ either switch position via SFTP.
 
 ## 13. Script Reference
 
+### `setup/hexbox_setup.sh`
+
+**Usage:** `sudo bash setup/hexbox_setup.sh`
+
+One-time provisioning script. **Model-aware:** auto-detects the Raspberry Pi model and
+OS version, then applies model-specific configuration before installing packages.
+
+| Detection | Action |
+|---|---|
+| Any model | Install base packages, Python deps, Metasploit, enable IP forwarding |
+| Bookworm | Install `python3-full` (required for `--break-system-packages`) |
+| Pi 4 or Pi 5 | Install `rpi-eeprom` firmware updater |
+| Pi 5 only | Append `usb_max_current_enable=1` to `/boot/firmware/config.txt`; print 27W supply warning |
+| All models | Install `macspoof.service` with dynamic interface enumeration (no hard-coded eth0/wlan0) |
+
+The `macspoof.service` unit iterates all non-loopback interfaces via `/sys/class/net`
+rather than hard-coding `eth0` and `wlan0`. This means it correctly randomizes MACs
+on any number of USB Ethernet adapters regardless of Pi model.
+
+---
+
 ### `scripts/engage.sh`
 
 **Usage:** `bash scripts/engage.sh [target-network]`
@@ -1606,6 +1691,17 @@ See [Section 7](#7-pre-flight-validation) for full documentation.
 The script automatically reads `config.json` and overlays its values onto the
 internal CONFIG dict via `_apply_config_json()` — meaning you only need to
 update `config.json` through `configure.sh`, not the preflight script itself.
+
+**Pi 4/5 additions:** `check_hardware()` now runs as the second check after
+`check_root()`. It:
+1. Reads `/proc/device-tree/model` to detect the Pi model and logs it in the banner
+2. On Pi 5: verifies `usb_max_current_enable=1` is present in the boot config; WARN if missing
+3. On Pi 4/5: verifies `rpi-eeprom-update` is installed; WARN if missing
+4. On non-Pi hardware: WARN that the platform is untested
+
+The Pineapple `interface` config key is automatically set from `config.json →
+interfaces.management` by `_apply_config_json()`, so it correctly follows whatever
+interface name is configured (wlan0, wlan1, etc.) rather than using a hard-coded default.
 
 ---
 
@@ -1938,7 +2034,7 @@ shell injection through parameter values.
 ### Pre-Engagement
 
 - Run `scripts/opsec.sh` before leaving for the site
-- Verify MAC randomization with `macchanger -s wlan0` — current MAC must differ from permanent
+- Verify MAC randomization with `macchanger -s eth0` and `macchanger -s wlan0` — current MAC must differ from permanent on each interface
 - Confirm hostname is `DESKTOP-WIN10` (or another appropriate decoy): `hostname`
 - Verify bash history is suppressed: `echo $HISTFILE` should return empty
 - Keep HexBox in a non-obvious enclosure (Pelican case, laptop bag)
@@ -1976,6 +2072,83 @@ shell injection through parameter values.
 ---
 
 ## 20. Troubleshooting
+
+### Raspberry Pi 4 / 5 — Model-Specific Issues
+
+#### Pi 5: Hak5 devices not detected or underpowered
+
+**Symptom:** Device cards show offline immediately; USB Ethernet adapters don't enumerate; Shark Jack / Bash Bunny don't appear.
+
+**Cause:** Pi 5 limits USB ports to 600mA when using a standard 15W supply. A 27W supply plus `usb_max_current_enable=1` in `/boot/firmware/config.txt` is required.
+
+```bash
+# Verify the setting is present
+grep usb_max_current /boot/firmware/config.txt
+# Expected output: usb_max_current_enable=1
+
+# If missing, re-run setup (safe to re-run):
+sudo bash setup/hexbox_setup.sh
+sudo reboot
+
+# Verify your power supply: the Pi 5 will show a low-voltage warning
+# in dmesg if the supply cannot provide 5A:
+dmesg | grep -i "voltage\|power\|throttl"
+```
+
+#### Pi 5: Flipper Zero not detected on /dev/ttyACM0
+
+**Symptom:** Flipper Zero serial control returns "port not found" in the dashboard.
+
+```bash
+# Check if the device appears anywhere
+lsusb | grep -i flipper
+ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
+
+# Check kernel messages after plugging in
+dmesg | tail -20
+
+# If device is at a different path (e.g. /dev/ttyACM1), update config:
+# config.json → flipper.serial_port → "/dev/ttyACM1"
+
+# Workaround: use a USB 2.0 hub between Pi 5 and Flipper Zero
+# (some USB 3.0 hub controllers have ACM enumeration bugs on Bookworm)
+```
+
+#### Pi 5: Boot config is at the wrong path
+
+The Pi 5 uses `/boot/firmware/config.txt`, not `/boot/config.txt`.
+
+```bash
+# Confirm correct path
+ls -la /boot/firmware/config.txt   # Pi 5 / Bookworm
+ls -la /boot/config.txt            # Pi 3/4 / Bullseye
+```
+
+#### Bookworm: pip install fails with "externally-managed-environment"
+
+```bash
+# Install python3-full first, then retry
+sudo apt install -y python3-full
+pip3 install --break-system-packages -r requirements.txt
+# Or re-run: sudo bash setup/hexbox_setup.sh
+```
+
+#### Pi 4: USB 3.0 adapter not detected as eth1
+
+If the USB Ethernet adapter appears as `enx<mac>` instead of `eth1`, predictable naming
+is enabled on the OS. Either disable it or update `config.json` interfaces to use the
+detected name.
+
+```bash
+# Check actual interface names
+ip link show
+
+# Disable predictable names permanently:
+sudo raspi-config  # → Advanced → Network Interface Names → No
+sudo reboot
+```
+
+---
 
 ### Dashboard Won't Start
 

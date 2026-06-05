@@ -51,6 +51,8 @@ def package_loot(loot_dir: Path, target_file: str | None = None) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         if target_file:
+            if Path(target_file).is_absolute():
+                raise ValueError(f"target_file must be relative, got: {target_file!r}")
             p = (loot_root / target_file).resolve()
             if p.is_file() and p.is_relative_to(loot_root):
                 zf.write(p, p.name)
