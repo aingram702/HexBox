@@ -40,7 +40,7 @@ echo ""
 echo "  Network interfaces (detected on this device):"
 ip link show 2>/dev/null \
     | grep -E "^[0-9]+:" \
-    | awk -F': ' '{print "    " $2}' \
+    | awk -F': ' '{split($2,a,"@"); print "    " a[1]}' \
     | grep -v "^    lo$" \
     || echo "    (could not detect — run 'ip link' manually)"
 echo ""
@@ -189,7 +189,12 @@ if [ "$HEXBOX_IP" != "$OLD_IP" ]; then
     for f in "$PAYLOADS"/*.ducky "$PAYLOADS"/*.ps1 "$PAYLOADS"/*.sh; do
         [ -f "$f" ] || continue
         if grep -q "$OLD_IP" "$f" 2>/dev/null; then
-            sed -i "s|$OLD_IP|$HEXBOX_IP|g" "$f"
+            python3 -c "
+import sys
+old, new, path = sys.argv[1], sys.argv[2], sys.argv[3]
+data = open(path, encoding='utf-8', errors='replace').read()
+open(path, 'w', encoding='utf-8').write(data.replace(old, new))
+" "$OLD_IP" "$HEXBOX_IP" "$f"
             echo "    Updated: $(basename "$f")"
         fi
     done

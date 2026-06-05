@@ -921,8 +921,13 @@ def check_hardware():
                     if os.path.exists("/boot/firmware/config.txt")
                     else "/boot/config.txt")
         try:
-            txt = open(boot_cfg).read()
-            if "usb_max_current_enable=1" in txt:
+            with open(boot_cfg, encoding="utf-8", errors="replace") as f:
+                txt = f.read()
+            enabled = any(
+                line.strip().startswith("usb_max_current_enable=1")
+                for line in txt.splitlines()
+            )
+            if enabled:
                 log_result("PASS", "Pi 5: usb_max_current_enable=1 set",
                            f"in {boot_cfg}")
             else:
@@ -935,8 +940,7 @@ def check_hardware():
 
     # Pi 4/5: rpi-eeprom should be installed
     if any(m in PI_MODEL for m in ("Raspberry Pi 4", "Raspberry Pi 5")):
-        import shutil as _sh
-        if _sh.which("rpi-eeprom-update"):
+        if shutil.which("rpi-eeprom-update"):
             log_result("PASS", "rpi-eeprom installed (Pi 4/5)")
         else:
             log_result("WARN", "rpi-eeprom not installed",

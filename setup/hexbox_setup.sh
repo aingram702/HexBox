@@ -69,7 +69,7 @@ fi
 # unlocks full 1.6A per port — required when running multiple Hak5 devices.
 
 if echo "$PI_MODEL" | grep -q "Raspberry Pi 5"; then
-    if ! grep -q "usb_max_current_enable=1" "$BOOT_CFG" 2>/dev/null; then
+    if ! grep -qE '^\s*usb_max_current_enable=1' "$BOOT_CFG" 2>/dev/null; then
         echo "" | sudo tee -a "$BOOT_CFG" > /dev/null
         echo "# HexBox: unlock full USB current (requires 27W / 5V 5A supply)" \
             | sudo tee -a "$BOOT_CFG" > /dev/null
@@ -104,10 +104,10 @@ mkdir -p ~/hexbox/loot/{pcaps,handshakes,creds,screenshots,nmap,hashes,exfil,sha
 
 # ── IP forwarding for MITM ────────────────────────────────────────────────────
 
-if ! grep -q 'net.ipv4.ip_forward=1' /etc/sysctl.conf; then
+if ! grep -qE '^\s*net\.ipv4\.ip_forward\s*=\s*1' /etc/sysctl.conf; then
     echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
+    sudo sysctl -p
 fi
-sudo sysctl -p
 
 # ── MAC randomisation service ─────────────────────────────────────────────────
 # Enumerates every non-loopback interface dynamically so this works on Pi 3,
