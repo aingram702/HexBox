@@ -54,6 +54,7 @@
     - 12.5 [OMG Plug](#125-omg-plug)
     - 12.6 [Bash Bunny](#126-bash-bunny)
     - 12.7 [Flipper Zero](#127-flipper-zero)
+    - 12.8 [ESP32 Board](#128-esp32-board)
 13. [Script Reference](#13-script-reference)
 14. [Intelligence Collection Pipeline](#14-intelligence-collection-pipeline)
 15. [Covert Exfiltration](#15-covert-exfiltration)
@@ -179,6 +180,7 @@ auto-detects the model and applies model-specific configuration.
 - **Power supply is mandatory:** The Pi 5 requires a genuine 27W (5V/5A) USB-C supply. Running with a standard 15W supply automatically throttles all USB ports to 600mA — not enough to power Hak5 devices. The setup script enables `usb_max_current_enable=1` in `/boot/firmware/config.txt` to unlock full current, but this only works with the correct supply.
 - **Boot config path changed:** Pi 5 uses `/boot/firmware/config.txt` instead of `/boot/config.txt`. All HexBox scripts detect this automatically.
 - **Flipper Zero on Bookworm:** USB CDC-ACM enumeration (`/dev/ttyACM0`) has known quirks on Pi 5 Bookworm. Test connectivity before deployment. If the device appears at a different path, update `config.json → flipper.serial_port`.
+- **ESP32 board:** Most ESP32 dev boards enumerate as `/dev/ttyUSB0` via a CP2102/CH340 UART bridge; native-USB ESP32-S2/S3/C3 variants appear as `/dev/ttyACM0`. Keep this distinct from the Flipper's port if both are attached, and update `config.json → esp32.serial_port` / `esp32.baud` to match (Marauder defaults to 115200).
 
 #### Pi 4 Notes
 
@@ -218,6 +220,7 @@ interface list and prompt for the correct names.
 | OMG Plug | HID payload delivery via WiFi | WiFi callback | 192.168.1.50 (configurable) |
 | Bash Bunny Mark II | HID + mass storage combo attacks | USB | 172.16.64.1 |
 | Flipper Zero | NFC/RFID/Sub-GHz/BadUSB | USB serial `/dev/ttyACM0` | N/A |
+| ESP32 Board (Marauder) | WiFi/BLE recon, deauth, beacon spam, wardrive | USB serial `/dev/ttyUSB0` | N/A |
 
 ### Optional Accessories
 
@@ -463,6 +466,17 @@ Permissions are set to `600` — never commit this file.
     "serial_port": "/dev/ttyACM0"  // Flipper Zero USB serial port
   },
 
+  "esp32": {
+    "transport":   "serial",       // "serial" | "tcp" | "http" — how to reach the board
+    "serial_port": "/dev/ttyUSB0", // serial: USB serial port (CP2102/CH340 = ttyUSB, native-USB = ttyACM)
+    "baud":        115200,         // serial: baud rate (ESP32 Marauder default = 115200)
+    "host":        "192.168.4.1",  // tcp/http: board IP (Marauder AP default = 192.168.4.1)
+    "port":        8080,           // tcp/http: command port
+    "http_path":   "/cmd",         // http: command endpoint path
+    "http_method": "GET",          // http: GET (?cmd=...) or POST
+    "firmware":    "marauder"      // firmware label (informational)
+  },
+
   "bloodhound": {
     "url":      "http://localhost:8080",  // BloodHound CE Docker instance
     "username": "admin",
@@ -588,8 +602,25 @@ Each device card displays:
 - Last response time (milliseconds)
 - Device-specific action buttons
 
-Click **Ping All Devices** to run a parallel connectivity check against all seven
-devices simultaneously.
+Click **Ping All Devices** to run a parallel connectivity check against all enabled
+devices simultaneously. Disabled devices show a grey dot and are skipped.
+
+#### Device Manager
+
+Devices are **optional** — HexBox boots and serves the dashboard no matter what is
+plugged in. The **Device Manager** card manages the fleet live, without restarting:
+
+- **Enable / Disable** — a disabled device is skipped by status checks and refuses
+  operations (with a clear message) until re-enabled.
+- **Add / Update Device** — register a new device by name + IP + credentials (and an
+  optional API port). Useful for a second Pineapple, a relocated OMG Plug, or any
+  SSH-reachable gear not in `config.json`.
+- **Remove** — delete a device you added at runtime (built-in devices can only be
+  disabled, not removed).
+- **Connect** — probe a single device on demand and update its status dot.
+
+Enable/disable state and runtime-added devices persist to `c2/device_state.json`
+(git-ignored), so they survive restarts while `config.json` stays a clean template.
 
 #### Device Action Buttons
 
@@ -602,6 +633,7 @@ devices simultaneously.
 | **OMG Plug** | Build & deliver each payload type; SFTP push to device |
 | **Bash Bunny** | Status Check, Push Recon Payload, Pull Loot, Install Custom Payload |
 | **Flipper Zero** | NFC Detect, RFID Read, BadUSB Run, Sub-GHz Capture |
+| **ESP32 Board** | AP Scan, Station Scan, List APs, Sniff Raw, BLE Scan, Wardrive, Deauth, Beacon Spam, Stop, raw serial command |
 
 #### Process Manager
 
@@ -852,12 +884,27 @@ Authentication can be provided via:
 |---|---|---|
 | `/` | GET | Render main dashboard (7-tab HTML) |
 | `/events` | GET | SSE stream — keep-alive connection for real-time events |
-| `/status` | GET | Ping all 7 devices in parallel; return JSON status map |
+| `/status` | GET | Probe all enabled devices in parallel; disabled devices reported as `disabled` |
 | `/processes` | GET | List tracked background processes with PIDs |
 | `/stop/<name>` | POST | Kill named process; `name` must be in `_VALID_PROCS` whitelist |
 | `/update/check` | GET | git log -1 to check for updates |
 | `/update/apply` | POST | git pull --rebase to apply updates |
 | `/restart` | POST | SIGHUP to gracefully restart dashboard |
+
+### Device Manager
+
+Devices are **optional** and managed at runtime — no device is required for the node
+to start, and gear can be connected/added from the dashboard without a restart.
+Enable/disable and runtime-added devices persist to `c2/device_state.json`
+(git-ignored; built-in devices still come from `config.json`).
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/devices` | GET | List all known devices: label, endpoint, `enabled`, `runtime` flags |
+| `/devices/add` | POST | `{"name","ip","user","pass","api_port"?,"label"?}` — add/update a device (enables it) |
+| `/devices/<name>/toggle` | POST | Enable ⇄ disable a device (disabled devices are skipped by status/operations) |
+| `/devices/<name>/remove` | POST | Remove a runtime-added device (built-ins can only be disabled) |
+| `/devices/<name>/connect` | POST | Probe a device on demand; returns `{up, ip}` (the console's **Connect** button) |
 
 ### Loot
 
@@ -961,6 +1008,36 @@ Authentication can be provided via:
 | `/flipper/rfid` | POST | Serial: read 125kHz RFID card |
 | `/flipper/badusb` | POST | Serial: run BadUSB script from Flipper storage |
 | `/flipper/subghz` | POST | Serial: Sub-GHz RX capture |
+
+### ESP32 Board
+
+Bridge to an ESP32 running [ESP32 Marauder](https://github.com/justcallmekoko/ESP32Marauder) (or any CLI firmware). The transport is selected by `config.json → esp32.transport`:
+
+- **`serial`** (default) — USB serial CLI at `serial_port` / `baud`
+- **`tcp`** — raw TCP command socket at `host:port` (telnet-style line CLI)
+- **`http`** — HTTP command endpoint: `<http_method> http://host:port<http_path>?cmd=...`
+
+The same `/esp32/*` routes below work regardless of transport, so you can move the board between USB and WiFi by editing config without touching the dashboard.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/esp32/status` | GET | Check connection, report transport/endpoint/baud/firmware |
+| `/esp32/scan_ap` | POST | Serial: `scanap` — scan for access points |
+| `/esp32/scan_sta` | POST | Serial: `scansta` — scan for stations/clients |
+| `/esp32/list_ap` | POST | Serial: `list -a` — list discovered APs |
+| `/esp32/sniff` | POST | Serial: `sniffraw` — raw 802.11 packet sniff |
+| `/esp32/ble_scan` | POST | Serial: `blescan -t a` — scan for BLE devices |
+| `/esp32/wardrive` | POST | Serial: `wardrive` — GPS wardrive (requires GPS module) |
+| `/esp32/deauth` | POST | Serial: `attack -t deauth` — deauth selected target(s) |
+| `/esp32/beacon` | POST | Serial: `attack -t beacon -r` — random beacon spam |
+| `/esp32/probe` | POST | Serial: `attack -t probe` — probe request flood |
+| `/esp32/stop` | POST | Serial: `stopscan` — halt the running scan/attack |
+| `/esp32/reboot` | POST | Serial: `reboot` — reboot the board |
+| `/esp32/cmd` | POST | `{"cmd":"channel -s 6"}` — send a raw serial command to the firmware CLI |
+
+> **Target selection:** Marauder attacks act on the currently *selected* AP/station
+> list. Run a scan first, then use the raw console (`/esp32/cmd`) to `list -a` and
+> `select -a <id>` before triggering `deauth`/`beacon`, e.g. `select -a 0`.
 
 ### Sliver C2
 
@@ -1607,6 +1684,47 @@ either switch position via SFTP.
 
 ---
 
+### 12.8 ESP32 Board
+
+**Connection:** Selectable via `config.json → esp32.transport`:
+
+| transport | Endpoint | Notes |
+|---|---|---|
+| `serial` *(default)* | `serial_port` @ `baud` | USB serial CLI. CP2102/CH340 boards = `/dev/ttyUSB0`; native-USB S2/S3/C3 = `/dev/ttyACM0` (keep distinct from the Flipper's port). |
+| `tcp` | `host:port` | Raw TCP line CLI — board on the WiFi / its own AP (Marauder AP = `192.168.4.1`). |
+| `http` | `http_method http://host:port/http_path?cmd=…` | For ESP32 firmware exposing an HTTP command handler. |
+
+**Protocol:** Carriage-return + newline terminated commands. Designed for
+[ESP32 Marauder](https://github.com/justcallmekoko/ESP32Marauder), but the raw
+command console (`/esp32/cmd`) works with any CLI firmware. The dashboard buttons
+and routes are transport-agnostic — switching USB ↔ WiFi is a config change only.
+
+ESP32 boards flashed with Marauder turn a sub-$15 dev board into a pocket
+WiFi/BLE recon and attack tool — a useful complement to the Pineapple for quick
+2.4 GHz surveys, deauth testing, and BLE enumeration where a full Pineapple is
+overkill. Scan/attack commands run continuously on the board; the dashboard
+returns the initial serial output and the operation keeps running until `Stop`.
+
+| HexBox Operation | Serial Command Sent | Output |
+|---|---|---|
+| AP Scan | `scanap` | Begins access-point discovery |
+| Station Scan | `scansta` | Begins client/station discovery |
+| List APs | `list -a` | Dumps discovered APs with indices |
+| Sniff Raw | `sniffraw` | Raw 802.11 frame sniffing |
+| BLE Scan | `blescan -t a` | Enumerates nearby BLE devices |
+| Wardrive | `wardrive` | GPS-tagged AP logging (needs GPS module) |
+| Deauth | `attack -t deauth` | Deauth the selected AP/station list |
+| Beacon Spam | `attack -t beacon -r` | Floods random SSID beacons |
+| Stop | `stopscan` | Halts the current scan/attack |
+| Raw command | *(user-supplied)* | Any firmware CLI command, e.g. `select -a 0` |
+
+**Selecting a target:** Marauder attacks operate on the *selected* list. Typical
+flow from the dashboard: `AP Scan` → in the raw console run `list -a`, then
+`select -a <id>` for the target row, then `Deauth`. Always confirm you are
+targeting in-scope, authorized assets.
+
+---
+
 ## 13. Script Reference
 
 ### `setup/hexbox_setup.sh`
@@ -2114,6 +2232,26 @@ dmesg | tail -20
 # (some USB 3.0 hub controllers have ACM enumeration bugs on Bookworm)
 ```
 
+#### ESP32 board not detected / "port not found"
+
+**Symptom:** ESP32 serial control returns "Serial port ... not found" or `[ERR]` in the dashboard.
+
+```bash
+# Identify the USB-UART bridge and its device node
+lsusb | grep -iE 'cp210|ch340|qinheng|silicon labs|espressif'
+ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+dmesg | tail -20
+
+# Most ESP32 dev boards = /dev/ttyUSB0 (CP2102/CH340).
+# Native-USB ESP32-S2/S3/C3 = /dev/ttyACM0 (can clash with Flipper — use distinct ports).
+# config.json → esp32.serial_port → matching node; esp32.baud → 115200 for Marauder
+
+# Permission denied reading the port? Add your user to the dialout group:
+sudo usermod -aG dialout "$USER"   # then log out / back in
+
+# Garbled output usually means a baud mismatch — confirm esp32.baud matches the firmware.
+```
+
 #### Pi 5: Boot config is at the wrong path
 
 The Pi 5 uses `/boot/firmware/config.txt`, not `/boot/config.txt`.
@@ -2312,6 +2450,7 @@ curl -H "X-HexBox-Token: your-token" http://10.0.0.99:1337/mobile/data
 | Bash Bunny Mark II | 172.16.64.1 | Switch to rightmost (arming) position |
 | OMG Plug | 192.168.1.50 (default) | Connects via WiFi; IP configurable |
 | Flipper Zero | /dev/ttyACM0 | USB serial (not network) |
+| ESP32 Board (Marauder) | /dev/ttyUSB0 | USB serial (not network); baud configurable |
 | HexBox Dashboard | 10.0.0.99 (default) | Set in config.json |
 | HexBox Catcher | 10.0.0.99:8000 | Same IP, different port |
 

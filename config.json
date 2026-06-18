@@ -50,6 +50,17 @@
   "flipper": {
     "serial_port": "/dev/ttyACM0"
   },
+  "esp32": {
+    "_comment":    "transport = serial | tcp | http. serial uses serial_port+baud; tcp/http use host+port (+http_path/http_method for http)",
+    "transport":   "serial",
+    "serial_port": "/dev/ttyUSB0",
+    "baud":        115200,
+    "host":        "192.168.4.1",
+    "port":        8080,
+    "http_path":   "/cmd",
+    "http_method": "GET",
+    "firmware":    "marauder"
+  },
   "bloodhound": {
     "url":      "http://localhost:8080",
     "username": "admin",
