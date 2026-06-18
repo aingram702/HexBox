@@ -50,6 +50,11 @@
   "flipper": {
     "serial_port": "/dev/ttyACM0"
   },
+  "esp32": {
+    "serial_port": "/dev/ttyUSB0",
+    "baud":        115200,
+    "firmware":    "marauder"
+  },
   "bloodhound": {
     "url":      "http://localhost:8080",
     "username": "admin",

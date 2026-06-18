@@ -159,6 +159,7 @@ if echo "$PI_MODEL" | grep -q "Raspberry Pi 5"; then
     echo "     - Use a 27W (5V/5A) USB-C power supply"
     echo "     - Use a powered USB hub for multiple Hak5 devices"
     echo "     - Flipper Zero: verify /dev/ttyACM0 is available after boot"
+    echo "     - ESP32 board: verify /dev/ttyUSB0 is available (ttyACM0 for native-USB variants)"
     echo "     - Boot config lives at $BOOT_CFG (not /boot/config.txt)"
 elif echo "$PI_MODEL" | grep -q "Raspberry Pi 4"; then
     echo ""

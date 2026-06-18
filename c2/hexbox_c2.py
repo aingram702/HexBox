@@ -36,6 +36,8 @@ DEVICES = _CFG.get("devices") or {
 _BUNNY_CFG   = _CFG.get("bashbunny") or DEVICES.get("bashbunny",
                    {"ip": "172.16.64.1", "user": "root", "pass": "hak5bunny"})
 _FLIPPER_CFG = _CFG.get("flipper", {"serial_port": "/dev/ttyACM0"})
+_ESP32_CFG   = _CFG.get("esp32",   {"serial_port": "/dev/ttyUSB0", "baud": 115200,
+                                     "firmware": "marauder"})
 _BH_CFG      = _CFG.get("bloodhound", {"url": "http://localhost:8080",
                                         "username": "admin", "password": "BloodHound!"})
 _SLIVER_CFG  = _CFG.get("sliver",  {"host": "127.0.0.1", "port": 31337})
@@ -579,6 +581,29 @@ tr:hover td{background:var(--bg2)}
     <button onclick="flipperCmd('rfid')">RFID Read</button>
     <button onclick="flipperCmd('subghz')">Sub-GHz RX</button>
     <button onclick="flipperCmd('badusb')" class="warn">BadUSB Run</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-hdr">
+    <h2>&#x1F4F6; ESP32 Board</h2>
+    <span class="dot" id="dot-esp32" title="unknown"></span>
+  </div>
+  <div class="card-body">
+    <button onclick="esp32Cmd('scan_ap')">AP Scan</button>
+    <button onclick="esp32Cmd('scan_sta')">Station Scan</button>
+    <button onclick="esp32Cmd('list_ap')">List APs</button>
+    <button onclick="esp32Cmd('sniff')">Sniff Raw</button>
+    <button onclick="esp32Cmd('ble_scan')">BLE Scan</button>
+    <button onclick="esp32Cmd('wardrive')">Wardrive</button>
+    <button onclick="esp32Cmd('deauth')" class="kill">Deauth</button>
+    <button onclick="esp32Cmd('beacon')" class="warn">Beacon Spam</button>
+    <button onclick="esp32Cmd('stop')" class="kill">&#x25A0; Stop</button>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <input id="esp32-raw" placeholder="raw serial cmd (e.g. channel -s 6)"
+             style="flex:1" onkeydown="if(event.key==='Enter')esp32Raw()">
+      <button onclick="esp32Raw()">Send</button>
+    </div>
   </div>
 </div>
 
@@ -1746,6 +1771,31 @@ async function flipperCmd(cmd) {
   } catch(e) { out.textContent='[ERR] '+e; }
 }
 
+// ---- ESP32 Board ----
+async function esp32Cmd(cmd) {
+  out.textContent = '[*] ESP32: '+cmd+'...';
+  try {
+    const r = await fetch('/esp32/'+cmd, {method:'POST'});
+    const j = await r.json();
+    out.textContent = j.output || j.error || '(no output)';
+    if (j.error) toast(j.error, 'err');
+  } catch(e) { out.textContent='[ERR] '+e; }
+}
+async function esp32Raw() {
+  const inp = document.getElementById('esp32-raw');
+  const cmd = (inp.value || '').trim();
+  if (!cmd) return;
+  out.textContent = '[*] ESP32: '+cmd+'...';
+  try {
+    const r = await fetch('/esp32/cmd', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({cmd})});
+    const j = await r.json();
+    out.textContent = j.output || j.error || '(no output)';
+    if (j.error) toast(j.error, 'err'); else inp.value='';
+  } catch(e) { out.textContent='[ERR] '+e; }
+}
+
 // ---- Sliver C2 ----
 async function checkSliver() {
   const dot = document.getElementById('dot-sliver');
@@ -1993,6 +2043,10 @@ def status():
     # Flipper Zero: check serial port presence (no TCP)
     fp = _FLIPPER_CFG.get("serial_port", "/dev/ttyACM0")
     result["flipper"] = {"ip": fp, "up": Path(fp).exists()}
+
+    # ESP32 board: check serial port presence (no TCP)
+    ep = _ESP32_CFG.get("serial_port", "/dev/ttyUSB0")
+    result["esp32"] = {"ip": ep, "up": Path(ep).exists()}
 
     return jsonify(result)
 
@@ -3033,6 +3087,88 @@ def flipper_badusb():
 def flipper_subghz():
     out = _flipper_cmd("subghz rx 433920000 --timeout 30", read_timeout=35.0)
     _log(f"Flipper Sub-GHz: {out[:80]}")
+    return jsonify(output=out)
+
+# ---------------------------------------------------------------------------
+# Routes — ESP32 board serial bridge (ESP32 Marauder / serial-CLI firmware)
+# ---------------------------------------------------------------------------
+
+def _esp32_cmd(cmd: str, read_timeout: float = 6.0) -> str:
+    port = _ESP32_CFG.get("serial_port", "/dev/ttyUSB0")
+    baud = int(_ESP32_CFG.get("baud", 115200))
+    if not Path(port).exists():
+        return f"[ERR] Serial port {port} not found — is the ESP32 board connected?"
+    try:
+        import serial
+    except ImportError:
+        return "[ERR] pyserial not installed — run: pip install pyserial"
+    try:
+        with serial.Serial(port, baud, timeout=1.0) as ser:
+            ser.reset_input_buffer()
+            ser.write(f"{cmd}\r\n".encode())
+            ser.flush()
+            resp = b""
+            deadline = time.time() + read_timeout
+            while time.time() < deadline:
+                chunk = ser.read(ser.in_waiting or 1)
+                if chunk:
+                    resp += chunk
+                else:
+                    time.sleep(0.05)
+            return resp.decode(errors="replace").strip() or "(no output — command sent)"
+    except Exception as e:
+        return f"[ERR] {e}"
+
+
+# ESP32 Marauder serial CLI command map. Override per-firmware in code if needed.
+_ESP32_CMDS = {
+    "scan_ap":   "scanap",
+    "scan_sta":  "scansta",
+    "list_ap":   "list -a",
+    "list_sta":  "list -s",
+    "sniff":     "sniffraw",
+    "ble_scan":  "blescan -t a",
+    "wardrive":  "wardrive",
+    "deauth":    "attack -t deauth",
+    "beacon":    "attack -t beacon -r",
+    "probe":     "attack -t probe",
+    "stop":      "stopscan",
+    "reboot":    "reboot",
+}
+
+# Long-running scan/attack commands get a shorter read window so the dashboard
+# returns promptly; the operation keeps running on the board until "stop".
+_ESP32_LONG = {"scan_ap", "scan_sta", "sniff", "ble_scan", "wardrive",
+               "deauth", "beacon", "probe"}
+
+
+@app.route("/esp32/status")
+def esp32_status():
+    port = _ESP32_CFG.get("serial_port", "/dev/ttyUSB0")
+    up   = Path(port).exists()
+    return jsonify(port=port, up=up,
+                   baud=int(_ESP32_CFG.get("baud", 115200)),
+                   firmware=_ESP32_CFG.get("firmware", "marauder"),
+                   output=f"ESP32 board: {'connected' if up else 'not found'} at {port}")
+
+
+@app.route("/esp32/cmd", methods=["POST"])
+def esp32_raw():
+    cmd = (request.get_json(silent=True) or {}).get("cmd", "").strip()
+    if not cmd:
+        return jsonify(error="no command supplied"), 400
+    out = _esp32_cmd(cmd, read_timeout=8.0)
+    _log(f"ESP32 raw '{cmd}': {out[:80]}")
+    return jsonify(output=out)
+
+
+@app.route("/esp32/<action>", methods=["POST"])
+def esp32_action(action: str):
+    if action not in _ESP32_CMDS:
+        return jsonify(error=f"unknown ESP32 action '{action}'"), 404
+    timeout = 4.0 if action in _ESP32_LONG else 6.0
+    out = _esp32_cmd(_ESP32_CMDS[action], read_timeout=timeout)
+    _log(f"ESP32 {action}: {out[:80]}")
     return jsonify(output=out)
 
 # ---------------------------------------------------------------------------

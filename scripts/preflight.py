@@ -414,6 +414,7 @@ def check_python_packages():
         "colorama": "colorama",
         "scapy":    "scapy",
         "impacket": "impacket",
+        "serial":   "pyserial",
     }
 
     for package, pip_name in import_map.items():

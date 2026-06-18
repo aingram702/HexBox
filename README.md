@@ -60,6 +60,7 @@ HexBox is a **command-and-control hub** for the Hak5 hardware ecosystem. It inte
 | 🔌 **OMG Plug** | `192.168.1.50` | Wireless HID payload delivery via DuckyScript |
 | 🐇 **Bash Bunny** | `172.16.64.1` | Multi-mode HID+ECM attacks, switch-selectable payloads |
 | 🐬 **Flipper Zero** | `/dev/ttyACM0` | NFC/RFID cloning, Sub-GHz capture, BadUSB |
+| 📶 **ESP32 Board** | `/dev/ttyUSB0` | WiFi/BLE recon, deauth, beacon spam, wardrive (ESP32 Marauder) |
 
 Also integrates: **Sliver C2** (implant generation + session management), **BloodHound CE** (AD attack path visualization), **Kismet** (GPS war-driving), and a **Mobile PWA** (read-only iOS/Android companion).
 
@@ -134,6 +135,7 @@ hashcat          ──(cracked.txt)──▶  SSE event ──▶  Cracked Pass
 | **Hashcat Integration** | Auto-extracts NTLMv2 hashes from Responder logs; launches `hashcat -m 5600` against rockyou; output feeds back to Intel tab |
 | **Bash Bunny Control** | Install switch payloads via SFTP; pull loot; `bunny_recon.sh` (ARP + nmap) and `bunny_exfil.sh` (HID+ECM Windows credential dump) |
 | **Flipper Zero Bridge** | pyserial bridge to `/dev/ttyACM0`; NFC detect, RFID read, Sub-GHz RX, BadUSB from the dashboard |
+| **ESP32 Board Bridge** | pyserial bridge to `/dev/ttyUSB0` (ESP32 Marauder firmware); AP/station scan, raw sniff, deauth, beacon spam, BLE scan, wardrive, plus a raw serial-command console |
 | **Sliver C2** | Start/stop `sliver-server daemon`; generate implants (Windows/Linux/macOS × amd64/arm64 × exe/shellcode/shared); list active sessions; download implants |
 | **PMKID Capture** | One-click hcxdumptool PMKID attack via Pineapple API |
 | **Monitor Mode** | airmon-ng toggle for the Pineapple adapter from the dashboard |
@@ -192,6 +194,7 @@ HexBox runs on Raspberry Pi 3B, 4, and 5 with Raspberry Pi OS Bullseye or Bookwo
 | OMG Plug / OMG Cable / OMG Adapter | `192.168.1.50` | HID payload delivery |
 | Bash Bunny (Mark II) | `172.16.64.1` | HID + ECM credential exfil |
 | Flipper Zero | `/dev/ttyACM0` | NFC/RFID, Sub-GHz, BadUSB |
+| ESP32 Board (Marauder) | `/dev/ttyUSB0` | WiFi/BLE recon, deauth, wardrive |
 
 ### Optional Accessories
 
@@ -320,6 +323,7 @@ The full structure after `setup/configure.sh`:
     "bashbunny":      {"ip": "172.16.64.1",  "user": "root", "pass": "hak5bunny"}
   },
   "flipper":    {"serial_port": "/dev/ttyACM0"},
+  "esp32":      {"serial_port": "/dev/ttyUSB0", "baud": 115200, "firmware": "marauder"},
   "bloodhound": {"url": "http://localhost:8080", "username": "admin", "password": "BloodHound!"},
   "sliver":     {"host": "127.0.0.1", "port": 31337},
   "kismet":     {"url": "http://localhost:2501", "username": "kismet", "password": "kismet"},
@@ -400,6 +404,7 @@ The primary control surface. Contains one card per device plus system controls.
 | **OMG Plug** | Deploy payloads wirelessly; trigger browser exfil, WiFi steal, AD recon |
 | **Bash Bunny** | Install Switch1/Switch2 payloads; pull loot; run SSH-triggered commands |
 | **Flipper Zero** | NFC detect, RFID read, Sub-GHz RX, BadUSB — via serial bridge |
+| **ESP32 Board** | AP/station scan, raw sniff, deauth, beacon spam, BLE scan, wardrive, raw serial console — via serial bridge |
 | **Pi Local** | Responder, Bettercap MITM, handshake crack, hashcat |
 | **Sliver C2** | Start/stop server; generate implants; view active sessions |
 | **Covert Exfil** | Package + encrypt + send loot over DNS or HTTPS |
@@ -804,6 +809,23 @@ dmesg | tail -20
 # Update config.json flipper.serial_port if the device appears at a different path
 ```
 
+### ESP32 board not detected on /dev/ttyUSB0
+
+Most ESP32 dev boards expose a CP2102/CH340 USB-UART bridge and enumerate as
+`/dev/ttyUSB0`. Native-USB chips (ESP32-S2/S3/C3) instead appear as
+`/dev/ttyACM0`, which can collide with the Flipper Zero — assign distinct ports.
+```bash
+# Identify the bridge chip and its device node
+lsusb | grep -iE 'cp210|ch340|qinheng|silicon labs|espressif'
+ls /dev/ttyUSB* /dev/ttyACM*
+dmesg | tail -20
+
+# Confirm the serial port is readable (add your user to the dialout group if not)
+sudo usermod -aG dialout "$USER"   # then log out/in
+
+# Update config.json esp32.serial_port / esp32.baud to match (Marauder = 115200)
+```
+
 ### Bookworm: pip install fails with "externally managed"
 
 ```bash
@@ -873,6 +895,7 @@ sudo python3 scripts/preflight.py
 | **Phase 5** | Custom Evil Portal templates (O365/Okta/Duo/Google), PCAP analysis dashboard, GPS war-driving with Kismet, Leaflet map, CSV/KML export |
 | **Phase 6** | AES-256-GCM encrypted exfil over DNS subdomains and HTTPS, Mobile PWA companion app, hashcat cracked password feedback loop, full security audit + remediation |
 | **Phase 7** | Raspberry Pi 4 and 5 compatibility: model-aware setup script, Bookworm support, dynamic MAC spoof service, Pi 5 USB current unlock, updated preflight hardware checks |
+| **Phase 8** | ESP32 board serial bridge (ESP32 Marauder): WiFi/BLE recon, deauth, beacon spam, wardrive, plus a raw serial-command console |
 
 ### Upcoming
 

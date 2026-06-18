@@ -59,6 +59,8 @@ read -rp "[?] OMG Plug IP                   [192.168.1.50]:    " OMG_IP
 read -rp "[?] OMG Plug pass                 [hak5omg]:         " OMG_PASS
 read -rp "[?] Bash Bunny pass               [hak5bunny]:       " BUNNY_PASS
 read -rp "[?] Flipper Zero serial port      [/dev/ttyACM0]:    " FLIPPER_PORT
+read -rp "[?] ESP32 board serial port       [/dev/ttyUSB0]:    " ESP32_PORT
+read -rp "[?] ESP32 baud rate               [115200]:          " ESP32_BAUD
 read -rp "[?] BloodHound CE URL             [http://localhost:8080]: " BH_URL
 read -rp "[?] BloodHound username           [admin]:           " BH_USER
 read -rp "[?] BloodHound password           [BloodHound!]:     " BH_PASS
@@ -89,6 +91,8 @@ OMG_IP=${OMG_IP:-192.168.1.50}
 OMG_PASS=${OMG_PASS:-hak5omg}
 BUNNY_PASS=${BUNNY_PASS:-hak5bunny}
 FLIPPER_PORT=${FLIPPER_PORT:-/dev/ttyACM0}
+ESP32_PORT=${ESP32_PORT:-/dev/ttyUSB0}
+ESP32_BAUD=${ESP32_BAUD:-115200}
 BH_URL=${BH_URL:-http://localhost:8080}
 BH_USER=${BH_USER:-admin}
 BH_PASS=${BH_PASS:-BloodHound!}
@@ -108,6 +112,7 @@ MGMT_IF="$MGMT_IF" WIRED_IF="$WIRED_IF" \
 PINE_PASS="$PINE_PASS" SHARK_PASS="$SHARK_PASS" SQ_PASS="$SQ_PASS" \
 TURTLE_PASS="$TURTLE_PASS" OMG_IP="$OMG_IP" OMG_PASS="$OMG_PASS" \
 BUNNY_PASS="$BUNNY_PASS" FLIPPER_PORT="$FLIPPER_PORT" \
+ESP32_PORT="$ESP32_PORT" ESP32_BAUD="$ESP32_BAUD" \
 BH_URL="$BH_URL" BH_USER="$BH_USER" BH_PASS="$BH_PASS" \
 KISMET_URL="$KISMET_URL" KISMET_USER="$KISMET_USER" KISMET_PASS="$KISMET_PASS" \
 EXFIL_DNS_DOMAIN="$EXFIL_DNS_DOMAIN" EXFIL_DNS_SERVER="$EXFIL_DNS_SERVER" \
@@ -143,6 +148,11 @@ config = {
     },
     "flipper": {
         "serial_port": e("FLIPPER_PORT", "/dev/ttyACM0"),
+    },
+    "esp32": {
+        "serial_port": e("ESP32_PORT", "/dev/ttyUSB0"),
+        "baud":        int(e("ESP32_BAUD", "115200") or "115200"),
+        "firmware":    "marauder",
     },
     "bloodhound": {
         "url":      e("BH_URL",  "http://localhost:8080"),
