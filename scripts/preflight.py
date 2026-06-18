@@ -346,20 +346,34 @@ def check_root():
 def check_config_placeholders():
     section("CONFIGURATION VALIDATION")
 
-    checks = [
-        ("Pineapple API Key",    CONFIG["pineapple"]["api_key"],     "YOUR_PINEAPPLE_API_KEY"),
-        ("SharkJack SSH Key",    CONFIG["sharkjack"]["ssh_key"],      "/home/pi/.ssh/sharkjack_rsa"),
-        ("Squirrel SSH Key",     CONFIG["squirrel"]["ssh_key"],       "/home/pi/.ssh/squirrel_rsa"),
-        ("Turtle SSH Key",       CONFIG["turtle"]["ssh_key"],         "/home/pi/.ssh/turtle_rsa"),
-        ("OMG WiFi Password",    CONFIG["omg"]["wifi_pass"],          "YOUR_OMG_WIFI_PASS"),
-        ("C2 External IP",       CONFIG["c2"]["external_ip"],         "YOUR.C2.IP.HERE"),
-        ("GPG Key ID",           CONFIG["hexbox"]["gpg_key_id"],      "YOUR_GPG_KEY_ID"),
+    # Per-device credentials: tied to each device's "enabled" flag. A disabled
+    # device is SKIPPED; an unconfigured but enabled device only WARNs (it can
+    # be set up / connected later from the web console) — it does not block GO.
+    device_checks = [
+        ("Pineapple API Key", "pineapple", CONFIG["pineapple"]["api_key"],  "YOUR_PINEAPPLE_API_KEY"),
+        ("SharkJack SSH Key", "sharkjack", CONFIG["sharkjack"]["ssh_key"],   "/home/pi/.ssh/sharkjack_rsa"),
+        ("Squirrel SSH Key",  "squirrel",  CONFIG["squirrel"]["ssh_key"],    "/home/pi/.ssh/squirrel_rsa"),
+        ("Turtle SSH Key",    "turtle",    CONFIG["turtle"]["ssh_key"],      "/home/pi/.ssh/turtle_rsa"),
+        ("OMG WiFi Password", "omg",       CONFIG["omg"]["wifi_pass"],       "YOUR_OMG_WIFI_PASS"),
     ]
+    for name, dev_key, value, placeholder in device_checks:
+        if not CONFIG.get(dev_key, {}).get("enabled", True):
+            log_result("SKIP", f"{name} ({dev_key} disabled in config)")
+        elif check_placeholder(value, placeholder):
+            log_result("WARN", f"{name} not configured",
+                       "Set it before using this device (optional — does not block deployment)")
+        else:
+            log_result("PASS", f"{name} configured")
 
-    for name, value, placeholder in checks:
+    # Core HexBox credentials (not device-specific) — these still block GO.
+    core_checks = [
+        ("C2 External IP", CONFIG["c2"]["external_ip"], "YOUR.C2.IP.HERE"),
+        ("GPG Key ID",     CONFIG["hexbox"]["gpg_key_id"], "YOUR_GPG_KEY_ID"),
+    ]
+    for name, value, placeholder in core_checks:
         if check_placeholder(value, placeholder):
             log_result("FAIL", f"{name} not configured",
-                       f"Edit CONFIG in preflight.py — still set to placeholder")
+                       "Edit CONFIG in preflight.py — still set to placeholder")
         else:
             log_result("PASS", f"{name} configured")
 
@@ -470,15 +484,15 @@ def check_pineapple():
     if ping_host(ip):
         log_result("PASS", f"Pineapple reachable", f"ICMP ping to {ip}")
     else:
-        log_result("FAIL", f"Pineapple unreachable",
-                   f"Cannot ping {ip} — check connection to Pineapple AP")
+        log_result("WARN", f"Pineapple not connected",
+                   f"Cannot ping {ip} — connect it now or from the web console (optional device)")
         return
 
     # Port check
     if check_port(ip, port):
         log_result("PASS", f"Pineapple API port open", f"{ip}:{port}")
     else:
-        log_result("FAIL", f"Pineapple API port closed", f"{ip}:{port}")
+        log_result("WARN", f"Pineapple API port closed", f"{ip}:{port}")
         return
 
     # API key check
@@ -517,14 +531,14 @@ def check_sharkjack():
     if ping_host(ip):
         log_result("PASS", f"SharkJack reachable", f"ICMP ping to {ip}")
     else:
-        log_result("FAIL", f"SharkJack unreachable",
-                   f"Cannot ping {ip} — is it plugged into USB hub?")
+        log_result("WARN", f"SharkJack not connected",
+                   f"Cannot ping {ip} — connect it now or from the web console (optional device)")
         return
 
     if check_port(ip, port):
         log_result("PASS", f"SharkJack SSH port open", f"{ip}:{port}")
     else:
-        log_result("FAIL", f"SharkJack SSH port closed", f"{ip}:{port}")
+        log_result("WARN", f"SharkJack SSH port closed", f"{ip}:{port}")
         return
 
     if not os.path.exists(key):
@@ -553,14 +567,14 @@ def check_squirrel():
     if ping_host(ip):
         log_result("PASS", f"Packet Squirrel reachable", f"ICMP ping to {ip}")
     else:
-        log_result("FAIL", f"Packet Squirrel unreachable",
-                   f"Cannot ping {ip} — set switch to ARMING position")
+        log_result("WARN", f"Packet Squirrel not connected",
+                   f"Cannot ping {ip} — set switch to ARMING position, or connect later (optional device)")
         return
 
     if check_port(ip, port):
         log_result("PASS", f"Packet Squirrel SSH port open", f"{ip}:{port}")
     else:
-        log_result("FAIL", f"Packet Squirrel SSH port closed", f"{ip}:{port}")
+        log_result("WARN", f"Packet Squirrel SSH port closed", f"{ip}:{port}")
         return
 
     if not os.path.exists(key):
@@ -589,14 +603,14 @@ def check_turtle():
     if ping_host(ip):
         log_result("PASS", f"LAN Turtle reachable", f"ICMP ping to {ip}")
     else:
-        log_result("FAIL", f"LAN Turtle unreachable",
-                   f"Cannot ping {ip} — check USB connection")
+        log_result("WARN", f"LAN Turtle not connected",
+                   f"Cannot ping {ip} — check USB connection, or connect later (optional device)")
         return
 
     if check_port(ip, port):
         log_result("PASS", f"LAN Turtle SSH port open", f"{ip}:{port}")
     else:
-        log_result("FAIL", f"LAN Turtle SSH port closed", f"{ip}:{port}")
+        log_result("WARN", f"LAN Turtle SSH port closed", f"{ip}:{port}")
         return
 
     if not os.path.exists(key):
@@ -883,14 +897,23 @@ def _apply_config_json():
     }
     for cfg_key, local_key in devmap.items():
         dev = c.get("devices", {}).get(cfg_key, {})
-        if dev.get("ip") and local_key in CONFIG:
+        if local_key not in CONFIG:
+            continue
+        if dev.get("ip"):
             CONFIG[local_key]["ip"] = dev["ip"]
+        # A device can be opted out via config.json ("enabled": false); it is
+        # then SKIPPED rather than required. Missing/unreachable enabled devices
+        # only WARN — they can be connected later from the web console.
+        if "enabled" in dev:
+            CONFIG[local_key]["enabled"] = bool(dev["enabled"])
 
     omg_dev = c.get("devices", {}).get("omgplug", {})
     if omg_dev.get("ip"):
         CONFIG["omg"]["callback_ip"] = omg_dev["ip"]
     if omg_dev.get("pass"):
         CONFIG["omg"]["wifi_pass"] = omg_dev["pass"]
+    if "enabled" in omg_dev:
+        CONFIG["omg"]["enabled"] = bool(omg_dev["enabled"])
 
     ifaces = c.get("interfaces", {})
     if ifaces.get("management"):
@@ -953,7 +976,8 @@ def main():
     banner()
 
     print(f"{INFO} Starting preflight checks...")
-    print(f"{WARN} Ensure all Hak5 devices are connected before running\n")
+    print(f"{INFO} Devices are optional — disconnected gear only WARNs and can be "
+          f"connected later from the web console\n")
 
     # Run all checks
     check_root()

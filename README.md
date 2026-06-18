@@ -135,7 +135,8 @@ hashcat          ──(cracked.txt)──▶  SSE event ──▶  Cracked Pass
 | **Hashcat Integration** | Auto-extracts NTLMv2 hashes from Responder logs; launches `hashcat -m 5600` against rockyou; output feeds back to Intel tab |
 | **Bash Bunny Control** | Install switch payloads via SFTP; pull loot; `bunny_recon.sh` (ARP + nmap) and `bunny_exfil.sh` (HID+ECM Windows credential dump) |
 | **Flipper Zero Bridge** | pyserial bridge to `/dev/ttyACM0`; NFC detect, RFID read, Sub-GHz RX, BadUSB from the dashboard |
-| **ESP32 Board Bridge** | pyserial bridge to `/dev/ttyUSB0` (ESP32 Marauder firmware); AP/station scan, raw sniff, deauth, beacon spam, BLE scan, wardrive, plus a raw serial-command console |
+| **ESP32 Board Bridge** | Control an ESP32 (Marauder firmware) over **serial, TCP, or HTTP** — set `esp32.transport`; AP/station scan, raw sniff, deauth, beacon spam, BLE scan, wardrive, plus a raw command console |
+| **Device Manager** | Enable/disable, add, remove, and test-connect any device from the web console — the node runs with **any subset** of gear connected; nothing is required at boot |
 | **Sliver C2** | Start/stop `sliver-server daemon`; generate implants (Windows/Linux/macOS × amd64/arm64 × exe/shellcode/shared); list active sessions; download implants |
 | **PMKID Capture** | One-click hcxdumptool PMKID attack via Pineapple API |
 | **Monitor Mode** | airmon-ng toggle for the Pineapple adapter from the dashboard |
@@ -323,7 +324,9 @@ The full structure after `setup/configure.sh`:
     "bashbunny":      {"ip": "172.16.64.1",  "user": "root", "pass": "hak5bunny"}
   },
   "flipper":    {"serial_port": "/dev/ttyACM0"},
-  "esp32":      {"serial_port": "/dev/ttyUSB0", "baud": 115200, "firmware": "marauder"},
+  "esp32":      {"transport": "serial", "serial_port": "/dev/ttyUSB0", "baud": 115200,
+                 "host": "192.168.4.1", "port": 8080, "http_path": "/cmd", "http_method": "GET",
+                 "firmware": "marauder"},
   "bloodhound": {"url": "http://localhost:8080", "username": "admin", "password": "BloodHound!"},
   "sliver":     {"host": "127.0.0.1", "port": 31337},
   "kismet":     {"url": "http://localhost:2501", "username": "kismet", "password": "kismet"},
@@ -404,7 +407,8 @@ The primary control surface. Contains one card per device plus system controls.
 | **OMG Plug** | Deploy payloads wirelessly; trigger browser exfil, WiFi steal, AD recon |
 | **Bash Bunny** | Install Switch1/Switch2 payloads; pull loot; run SSH-triggered commands |
 | **Flipper Zero** | NFC detect, RFID read, Sub-GHz RX, BadUSB — via serial bridge |
-| **ESP32 Board** | AP/station scan, raw sniff, deauth, beacon spam, BLE scan, wardrive, raw serial console — via serial bridge |
+| **ESP32 Board** | AP/station scan, raw sniff, deauth, beacon spam, BLE scan, wardrive, raw command console — via serial / TCP / HTTP |
+| **Device Manager** | Enable/disable, add, remove, and test-connect devices live (no restart) — run with any subset of gear connected |
 | **Pi Local** | Responder, Bettercap MITM, handshake crack, hashcat |
 | **Sliver C2** | Start/stop server; generate implants; view active sessions |
 | **Covert Exfil** | Package + encrypt + send loot over DNS or HTTPS |
@@ -826,6 +830,34 @@ sudo usermod -aG dialout "$USER"   # then log out/in
 # Update config.json esp32.serial_port / esp32.baud to match (Marauder = 115200)
 ```
 
+### ESP32 over WiFi (network transport)
+
+The ESP32 doesn't have to be tethered by USB. Set `esp32.transport` to control it
+over the network instead — handy when the board rides along on the target WLAN or
+runs its own AP:
+
+| transport | Config keys | How a command is sent |
+|-----------|-------------|-----------------------|
+| `serial` (default) | `serial_port`, `baud` | USB serial CLI |
+| `tcp` | `host`, `port` | raw TCP socket, `cmd\r\n`, read reply |
+| `http` | `host`, `port`, `http_path`, `http_method` | `GET /cmd?cmd=...` (or POST) to the board's web handler |
+
+```bash
+# Quick reachability test for a networked board
+nc -vz 192.168.4.1 8080            # tcp transport
+curl "http://192.168.4.1/cmd?cmd=scanap"   # http transport
+```
+
+### A device isn't connected — does HexBox still run?
+
+Yes. **Devices are optional.** The node and dashboard start regardless of what's
+plugged in; missing devices simply show a grey/red status dot. Connect them at any
+time from the **Device Manager** card — enable/disable, add a new device (IP + creds),
+remove one, or hit **Connect** to probe it on demand. No restart needed. `preflight.py`
+treats a disconnected device as a `WARN` (not a `FAIL`), so it never blocks a GO. To
+opt a device out of preflight entirely, set `"enabled": false` on it under `devices`
+in `config.json`.
+
 ### Bookworm: pip install fails with "externally managed"
 
 ```bash
@@ -895,7 +927,7 @@ sudo python3 scripts/preflight.py
 | **Phase 5** | Custom Evil Portal templates (O365/Okta/Duo/Google), PCAP analysis dashboard, GPS war-driving with Kismet, Leaflet map, CSV/KML export |
 | **Phase 6** | AES-256-GCM encrypted exfil over DNS subdomains and HTTPS, Mobile PWA companion app, hashcat cracked password feedback loop, full security audit + remediation |
 | **Phase 7** | Raspberry Pi 4 and 5 compatibility: model-aware setup script, Bookworm support, dynamic MAC spoof service, Pi 5 USB current unlock, updated preflight hardware checks |
-| **Phase 8** | ESP32 board serial bridge (ESP32 Marauder): WiFi/BLE recon, deauth, beacon spam, wardrive, plus a raw serial-command console |
+| **Phase 8** | ESP32 board control (ESP32 Marauder) over serial/TCP/HTTP — WiFi/BLE recon, deauth, beacon spam, wardrive + raw command console; runtime **Device Manager** (enable/disable/add/remove/connect) making all devices optional and hot-connectable from the web console |
 
 ### Upcoming
 

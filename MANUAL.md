@@ -467,8 +467,13 @@ Permissions are set to `600` — never commit this file.
   },
 
   "esp32": {
-    "serial_port": "/dev/ttyUSB0", // ESP32 board USB serial port (CP2102/CH340 = ttyUSB, native-USB = ttyACM)
-    "baud":        115200,         // serial baud rate (ESP32 Marauder default = 115200)
+    "transport":   "serial",       // "serial" | "tcp" | "http" — how to reach the board
+    "serial_port": "/dev/ttyUSB0", // serial: USB serial port (CP2102/CH340 = ttyUSB, native-USB = ttyACM)
+    "baud":        115200,         // serial: baud rate (ESP32 Marauder default = 115200)
+    "host":        "192.168.4.1",  // tcp/http: board IP (Marauder AP default = 192.168.4.1)
+    "port":        8080,           // tcp/http: command port
+    "http_path":   "/cmd",         // http: command endpoint path
+    "http_method": "GET",          // http: GET (?cmd=...) or POST
     "firmware":    "marauder"      // firmware label (informational)
   },
 
@@ -597,8 +602,25 @@ Each device card displays:
 - Last response time (milliseconds)
 - Device-specific action buttons
 
-Click **Ping All Devices** to run a parallel connectivity check against all seven
-devices simultaneously.
+Click **Ping All Devices** to run a parallel connectivity check against all enabled
+devices simultaneously. Disabled devices show a grey dot and are skipped.
+
+#### Device Manager
+
+Devices are **optional** — HexBox boots and serves the dashboard no matter what is
+plugged in. The **Device Manager** card manages the fleet live, without restarting:
+
+- **Enable / Disable** — a disabled device is skipped by status checks and refuses
+  operations (with a clear message) until re-enabled.
+- **Add / Update Device** — register a new device by name + IP + credentials (and an
+  optional API port). Useful for a second Pineapple, a relocated OMG Plug, or any
+  SSH-reachable gear not in `config.json`.
+- **Remove** — delete a device you added at runtime (built-in devices can only be
+  disabled, not removed).
+- **Connect** — probe a single device on demand and update its status dot.
+
+Enable/disable state and runtime-added devices persist to `c2/device_state.json`
+(git-ignored), so they survive restarts while `config.json` stays a clean template.
 
 #### Device Action Buttons
 
@@ -862,12 +884,27 @@ Authentication can be provided via:
 |---|---|---|
 | `/` | GET | Render main dashboard (7-tab HTML) |
 | `/events` | GET | SSE stream — keep-alive connection for real-time events |
-| `/status` | GET | Ping all 7 devices in parallel; return JSON status map |
+| `/status` | GET | Probe all enabled devices in parallel; disabled devices reported as `disabled` |
 | `/processes` | GET | List tracked background processes with PIDs |
 | `/stop/<name>` | POST | Kill named process; `name` must be in `_VALID_PROCS` whitelist |
 | `/update/check` | GET | git log -1 to check for updates |
 | `/update/apply` | POST | git pull --rebase to apply updates |
 | `/restart` | POST | SIGHUP to gracefully restart dashboard |
+
+### Device Manager
+
+Devices are **optional** and managed at runtime — no device is required for the node
+to start, and gear can be connected/added from the dashboard without a restart.
+Enable/disable and runtime-added devices persist to `c2/device_state.json`
+(git-ignored; built-in devices still come from `config.json`).
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/devices` | GET | List all known devices: label, endpoint, `enabled`, `runtime` flags |
+| `/devices/add` | POST | `{"name","ip","user","pass","api_port"?,"label"?}` — add/update a device (enables it) |
+| `/devices/<name>/toggle` | POST | Enable ⇄ disable a device (disabled devices are skipped by status/operations) |
+| `/devices/<name>/remove` | POST | Remove a runtime-added device (built-ins can only be disabled) |
+| `/devices/<name>/connect` | POST | Probe a device on demand; returns `{up, ip}` (the console's **Connect** button) |
 
 ### Loot
 
@@ -974,11 +1011,17 @@ Authentication can be provided via:
 
 ### ESP32 Board
 
-Serial bridge to an ESP32 running [ESP32 Marauder](https://github.com/justcallmekoko/ESP32Marauder) (or any firmware with a serial CLI). Default port `/dev/ttyUSB0`, baud 115200 — both configurable in `config.json → esp32`.
+Bridge to an ESP32 running [ESP32 Marauder](https://github.com/justcallmekoko/ESP32Marauder) (or any CLI firmware). The transport is selected by `config.json → esp32.transport`:
+
+- **`serial`** (default) — USB serial CLI at `serial_port` / `baud`
+- **`tcp`** — raw TCP command socket at `host:port` (telnet-style line CLI)
+- **`http`** — HTTP command endpoint: `<http_method> http://host:port<http_path>?cmd=...`
+
+The same `/esp32/*` routes below work regardless of transport, so you can move the board between USB and WiFi by editing config without touching the dashboard.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/esp32/status` | GET | Check serial connection, report port/baud/firmware |
+| `/esp32/status` | GET | Check connection, report transport/endpoint/baud/firmware |
 | `/esp32/scan_ap` | POST | Serial: `scanap` — scan for access points |
 | `/esp32/scan_sta` | POST | Serial: `scansta` — scan for stations/clients |
 | `/esp32/list_ap` | POST | Serial: `list -a` — list discovered APs |
@@ -1643,14 +1686,18 @@ either switch position via SFTP.
 
 ### 12.8 ESP32 Board
 
-**Connection:** USB serial at `/dev/ttyUSB0` (CP2102/CH340 UART bridge). Native-USB
-ESP32 variants (S2/S3/C3) enumerate as `/dev/ttyACM0` instead — set
-`config.json → esp32.serial_port` accordingly, and keep it distinct from the
-Flipper Zero's port if both are attached.
-**Protocol:** Serial CLI at `config.json → esp32.baud` (default 115200,
-carriage-return + newline terminated). Designed for
+**Connection:** Selectable via `config.json → esp32.transport`:
+
+| transport | Endpoint | Notes |
+|---|---|---|
+| `serial` *(default)* | `serial_port` @ `baud` | USB serial CLI. CP2102/CH340 boards = `/dev/ttyUSB0`; native-USB S2/S3/C3 = `/dev/ttyACM0` (keep distinct from the Flipper's port). |
+| `tcp` | `host:port` | Raw TCP line CLI — board on the WiFi / its own AP (Marauder AP = `192.168.4.1`). |
+| `http` | `http_method http://host:port/http_path?cmd=…` | For ESP32 firmware exposing an HTTP command handler. |
+
+**Protocol:** Carriage-return + newline terminated commands. Designed for
 [ESP32 Marauder](https://github.com/justcallmekoko/ESP32Marauder), but the raw
-command console works with any serial-CLI firmware.
+command console (`/esp32/cmd`) works with any CLI firmware. The dashboard buttons
+and routes are transport-agnostic — switching USB ↔ WiFi is a config change only.
 
 ESP32 boards flashed with Marauder turn a sub-$15 dev board into a pocket
 WiFi/BLE recon and attack tool — a useful complement to the Pineapple for quick

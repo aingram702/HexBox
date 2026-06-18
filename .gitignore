@@ -24,6 +24,9 @@ loot/reports/
 # Engagement sessions (contain target info)
 loot/sessions.json
 
+# Runtime device manager state (per-deployment enable/disable + added devices)
+c2/device_state.json
+
 # OS artifacts
 .DS_Store
 Thumbs.db

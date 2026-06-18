@@ -36,7 +36,9 @@ DEVICES = _CFG.get("devices") or {
 _BUNNY_CFG   = _CFG.get("bashbunny") or DEVICES.get("bashbunny",
                    {"ip": "172.16.64.1", "user": "root", "pass": "hak5bunny"})
 _FLIPPER_CFG = _CFG.get("flipper", {"serial_port": "/dev/ttyACM0"})
-_ESP32_CFG   = _CFG.get("esp32",   {"serial_port": "/dev/ttyUSB0", "baud": 115200,
+_ESP32_CFG   = _CFG.get("esp32",   {"transport": "serial", "serial_port": "/dev/ttyUSB0",
+                                     "baud": 115200, "host": "192.168.4.1", "port": 8080,
+                                     "http_path": "/cmd", "http_method": "GET",
                                      "firmware": "marauder"})
 _BH_CFG      = _CFG.get("bloodhound", {"url": "http://localhost:8080",
                                         "username": "admin", "password": "BloodHound!"})
@@ -198,7 +200,11 @@ def _stop_proc_locked(name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def ssh_exec(device: str, cmd: str) -> str:
-    d = DEVICES[device]
+    d = _device_cfg(device)
+    if d is None:
+        return f"[ERR] Unknown device '{device}' — add it in the Device Manager"
+    if not _device_enabled(device):
+        return f"[ERR] Device '{device}' is disabled — enable it in the Device Manager"
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -212,7 +218,11 @@ def ssh_exec(device: str, cmd: str) -> str:
 
 
 def sftp_pull(device: str, remote_dir: str, local_dir: Path) -> str:
-    d = DEVICES[device]
+    d = _device_cfg(device)
+    if d is None:
+        return f"[ERR] Unknown device '{device}' — add it in the Device Manager"
+    if not _device_enabled(device):
+        return f"[ERR] Device '{device}' is disabled — enable it in the Device Manager"
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -265,6 +275,81 @@ def _load_sessions() -> dict:
 
 def _save_sessions(data: dict):
     _SESSIONS_FILE.write_text(json.dumps(data, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Device registry — merges config.json devices with runtime add/enable state so
+# the node runs with ANY subset of gear connected. Devices are optional: a
+# missing or disabled device degrades gracefully instead of failing, and new
+# devices can be added/enabled from the web console rather than at boot time.
+# ---------------------------------------------------------------------------
+
+_DEV_STATE_FILE = Path(__file__).parent / "device_state.json"
+_dev_lock = threading.Lock()
+
+# Friendly labels for the built-in Hak5 device keys.
+_DEVICE_LABELS = {
+    "pineapple":      "WiFi Pineapple",
+    "sharkjack":      "Shark Jack",
+    "packetsquirrel": "Packet Squirrel",
+    "lanturtle":      "LAN Turtle",
+    "omgplug":        "OMG Plug",
+    "bashbunny":      "Bash Bunny",
+}
+
+
+def _load_dev_state() -> dict:
+    if _DEV_STATE_FILE.exists():
+        try:
+            d = json.loads(_DEV_STATE_FILE.read_text())
+            d.setdefault("disabled", [])
+            d.setdefault("extra", {})
+            return d
+        except Exception:
+            pass
+    return {"disabled": [], "extra": {}}
+
+
+def _save_dev_state(state: dict):
+    try:
+        _DEV_STATE_FILE.write_text(json.dumps(state, indent=2))
+    except Exception as e:
+        _log(f"[ERR] cannot save device state: {e}")
+
+
+def _all_devices() -> dict:
+    """Every known device: config.json devices + Bash Bunny + runtime-added."""
+    devs = dict(DEVICES)
+    if _BUNNY_CFG.get("ip") and "bashbunny" not in devs:
+        devs["bashbunny"] = dict(_BUNNY_CFG)
+    for name, cfg in (_load_dev_state().get("extra") or {}).items():
+        devs[name] = cfg
+    return devs
+
+
+def _device_cfg(name: str) -> dict | None:
+    return _all_devices().get(name)
+
+
+def _device_enabled(name: str) -> bool:
+    return name not in set(_load_dev_state().get("disabled", []))
+
+
+def _device_probe(info: dict) -> bool:
+    """True if any reasonable management port is reachable."""
+    ip = info.get("ip", "")
+    if not ip:
+        return False
+    ports = [info.get("ssh_port", 22), 22, 80, info.get("api_port", 0)]
+    for port in ports:
+        if not port:
+            continue
+        try:
+            socket.create_connection((ip, int(port)), timeout=2).close()
+            return True
+        except Exception:
+            pass
+    return False
 
 
 def _active_session() -> dict | None:
@@ -603,6 +688,28 @@ tr:hover td{background:var(--bg2)}
       <input id="esp32-raw" placeholder="raw serial cmd (e.g. channel -s 6)"
              style="flex:1" onkeydown="if(event.key==='Enter')esp32Raw()">
       <button onclick="esp32Raw()">Send</button>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="grid-column:1/-1">
+  <div class="card-hdr">
+    <h2>&#x1F50C; Device Manager</h2>
+    <button onclick="loadDevices()" style="margin-left:auto">Refresh</button>
+  </div>
+  <div class="card-body" style="flex-direction:column;align-items:stretch;gap:8px">
+    <p style="margin:0;color:var(--t1);font-size:.78em">
+      Devices are optional — the node runs with any subset connected. Enable,
+      disable, add, or test-connect gear here without restarting HexBox.
+    </p>
+    <div id="devmgr" style="display:flex;flex-direction:column;gap:4px">Loading…</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;border-top:1px solid var(--bdr);padding-top:8px">
+      <input id="dev-name" placeholder="name (e.g. pineapple2)" style="width:150px">
+      <input id="dev-ip"   placeholder="IP address" style="width:130px">
+      <input id="dev-user" placeholder="user" value="root" style="width:80px">
+      <input id="dev-pass" type="password" placeholder="password" style="width:120px">
+      <input id="dev-api"  placeholder="api port (opt)" style="width:100px">
+      <button onclick="addDevice()">Add / Update Device</button>
     </div>
   </div>
 </div>
@@ -1037,10 +1144,86 @@ async function checkStatus() {
     const j = await (await fetch('/status')).json();
     for (const [dev, info] of Object.entries(j)) {
       const d = document.getElementById('dot-'+dev);
-      if (d) { d.className='dot '+(info.up?'up':'dn');
+      if (d) {
+        if (info.disabled) { d.className='dot'; d.title='disabled: '+info.ip; }
+        else { d.className='dot '+(info.up?'up':'dn');
                d.title=(info.up?'reachable':'unreachable')+': '+info.ip; }
+      }
     }
   } catch(_) {}
+}
+
+// ---- Device Manager ----
+async function loadDevices() {
+  const box = document.getElementById('devmgr');
+  if (!box) return;
+  try {
+    const j = await (await fetch('/devices')).json();
+    const rows = (j.devices || []).map(d => {
+      const dotcls = d.enabled ? 'dot dn' : 'dot';
+      const meta   = (d.ip || '—') + (d.user ? ' · '+esc(d.user) : '')
+                     + (d.transport ? ' ['+esc(d.transport)+']' : '');
+      const rm = d.runtime
+        ? `<button class="kill" data-name="${esc(d.name)}" onclick="removeDevice(this.dataset.name)">Remove</button>`
+        : '';
+      return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
+        + `<span id="dmdot-${esc(d.name)}" class="${dotcls}"></span>`
+        + `<b style="min-width:130px">${esc(d.label)}</b>`
+        + `<span style="color:var(--t1);min-width:160px;font-size:.85em">${esc(meta)}</span>`
+        + `<button data-name="${esc(d.name)}" onclick="connectDevice(this.dataset.name)">Connect</button>`
+        + `<button class="${d.enabled?'kill':''}" data-name="${esc(d.name)}" `
+        +   `onclick="toggleDevice(this.dataset.name)">${d.enabled?'Disable':'Enable'}</button>`
+        + rm
+        + `</div>`;
+    });
+    box.innerHTML = rows.join('') || '<i>No devices configured.</i>';
+  } catch(e) { box.innerHTML = '[ERR] '+e; }
+}
+async function connectDevice(name) {
+  const dot = document.getElementById('dmdot-'+name);
+  if (dot) dot.className = 'dot chk';
+  try {
+    const j = await (await fetch('/devices/'+name+'/connect', {method:'POST'})).json();
+    out.textContent = j.output || j.error || '';
+    if (dot) dot.className = 'dot '+(j.up?'up':'dn');
+    if (j.error) toast(j.error,'err');
+  } catch(e) { out.textContent='[ERR] '+e; if (dot) dot.className='dot dn'; }
+}
+async function toggleDevice(name) {
+  try {
+    const j = await (await fetch('/devices/'+name+'/toggle', {method:'POST'})).json();
+    out.textContent = j.output || j.error || '';
+    if (j.error) toast(j.error,'err');
+    loadDevices(); checkStatus();
+  } catch(e) { out.textContent='[ERR] '+e; }
+}
+async function removeDevice(name) {
+  try {
+    const j = await (await fetch('/devices/'+name+'/remove', {method:'POST'})).json();
+    out.textContent = j.output || j.error || '';
+    if (j.error) toast(j.error,'err');
+    loadDevices(); checkStatus();
+  } catch(e) { out.textContent='[ERR] '+e; }
+}
+async function addDevice() {
+  const body = {
+    name: document.getElementById('dev-name').value.trim(),
+    ip:   document.getElementById('dev-ip').value.trim(),
+    user: document.getElementById('dev-user').value.trim(),
+    pass: document.getElementById('dev-pass').value,
+    api_port: document.getElementById('dev-api').value.trim(),
+  };
+  if (!body.name || !body.ip) { toast('name and IP are required','err'); return; }
+  try {
+    const r = await fetch('/devices/add', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)});
+    const j = await r.json();
+    out.textContent = j.output || j.error || '';
+    if (j.error) { toast(j.error,'err'); return; }
+    ['dev-name','dev-ip','dev-pass','dev-api'].forEach(id=>document.getElementById(id).value='');
+    loadDevices(); checkStatus();
+  } catch(e) { out.textContent='[ERR] '+e; }
 }
 
 async function refreshProcs() {
@@ -1903,6 +2086,7 @@ function copyText(text) {
 // ---- Init ----
 initSSE();
 checkStatus();
+loadDevices();
 refreshProcs();
 loadActiveEngagement();
 checkSliver();
@@ -2028,27 +2212,164 @@ def status():
                 pass
         return dev_name, {"ip": ip, "up": up}
 
-    all_devices = dict(DEVICES)
-    # Bash Bunny already in DEVICES; add it only if separately configured
-    if _BUNNY_CFG.get("ip") and "bashbunny" not in all_devices:
-        all_devices["bashbunny"] = _BUNNY_CFG
+    all_devices = _all_devices()
+    disabled    = set(_load_dev_state().get("disabled", []))
 
     result = {}
-    with ThreadPoolExecutor(max_workers=max(len(all_devices), 1)) as ex:
-        futures = {ex.submit(_check, dev, info): dev for dev, info in all_devices.items()}
-        for fut in as_completed(futures):
-            name, res = fut.result()
-            result[name] = res
+    # Disabled devices are reported but not probed (no point hitting the network).
+    for name in disabled:
+        if name in all_devices:
+            result[name] = {"ip": all_devices[name].get("ip", ""),
+                            "up": False, "disabled": True}
+
+    to_check = {n: i for n, i in all_devices.items() if n not in disabled}
+    if to_check:
+        with ThreadPoolExecutor(max_workers=max(len(to_check), 1)) as ex:
+            futures = {ex.submit(_check, dev, info): dev for dev, info in to_check.items()}
+            for fut in as_completed(futures):
+                name, res = fut.result()
+                result[name] = res
 
     # Flipper Zero: check serial port presence (no TCP)
     fp = _FLIPPER_CFG.get("serial_port", "/dev/ttyACM0")
     result["flipper"] = {"ip": fp, "up": Path(fp).exists()}
 
-    # ESP32 board: check serial port presence (no TCP)
-    ep = _ESP32_CFG.get("serial_port", "/dev/ttyUSB0")
-    result["esp32"] = {"ip": ep, "up": Path(ep).exists()}
+    # ESP32 board: transport-aware reachability (serial port / TCP / HTTP)
+    if _device_enabled("esp32"):
+        up, endpoint = _esp32_reachable()
+        result["esp32"] = {"ip": endpoint, "up": up}
+    else:
+        ep = _ESP32_CFG.get("serial_port", "/dev/ttyUSB0")
+        result["esp32"] = {"ip": ep, "up": False, "disabled": True}
 
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# Routes — device manager (enable/disable/add/remove/connect at runtime)
+# ---------------------------------------------------------------------------
+
+def _safe_dev_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "", (name or ""))[:32]
+
+
+@app.route("/devices")
+def devices_list():
+    """All known devices with type, endpoint, enabled flag, and live status."""
+    state    = _load_dev_state()
+    disabled = set(state.get("disabled", []))
+    extra    = state.get("extra") or {}
+    devs     = _all_devices()
+
+    out = []
+    for name, info in sorted(devs.items()):
+        out.append({
+            "name":     name,
+            "label":    _DEVICE_LABELS.get(name, info.get("label", name)),
+            "ip":       info.get("ip", ""),
+            "user":     info.get("user", ""),
+            "enabled":  name not in disabled,
+            "runtime":  name in extra,   # added via console (removable)
+        })
+
+    # ESP32 is a serial/network bridge, not an SSH device — surface it too.
+    transport = _esp32_transport()
+    out.append({
+        "name":      "esp32",
+        "label":     "ESP32 Board",
+        "ip":        _esp32_reachable()[1],
+        "user":      "",
+        "enabled":   "esp32" not in disabled,
+        "runtime":   False,
+        "transport": transport,
+    })
+    return jsonify(devices=out)
+
+
+@app.route("/devices/add", methods=["POST"])
+def devices_add():
+    body = request.get_json(silent=True) or {}
+    name = _safe_dev_name(body.get("name", ""))
+    ip   = (body.get("ip", "") or "").strip()
+    if not name or not ip:
+        return jsonify(error="name and ip are required"), 400
+
+    cfg = {"ip": ip,
+           "user": (body.get("user") or "root").strip(),
+           "pass": body.get("pass", "")}
+    if body.get("api_port"):
+        try:
+            cfg["api_port"] = int(body["api_port"])
+        except (ValueError, TypeError):
+            pass
+    if body.get("label"):
+        cfg["label"] = str(body["label"])[:48]
+
+    with _dev_lock:
+        state = _load_dev_state()
+        state.setdefault("extra", {})[name] = cfg
+        # Adding (re-adding) a device implicitly enables it.
+        state["disabled"] = [d for d in state.get("disabled", []) if d != name]
+        _save_dev_state(state)
+    _log(f"Device added/updated via console: {name} ({ip})")
+    return jsonify(output=f"Device '{name}' saved ({ip})", name=name)
+
+
+@app.route("/devices/<name>/toggle", methods=["POST"])
+def devices_toggle(name: str):
+    name = _safe_dev_name(name)
+    known = bool(name) and (name == "esp32" or _device_cfg(name) is not None)
+    if not known:
+        return jsonify(error=f"unknown device '{name}'"), 404
+    with _dev_lock:
+        state    = _load_dev_state()
+        disabled = set(state.get("disabled", []))
+        if name in disabled:
+            disabled.discard(name)
+            enabled = True
+        else:
+            disabled.add(name)
+            enabled = False
+        state["disabled"] = sorted(disabled)
+        _save_dev_state(state)
+    _log(f"Device '{name}' {'enabled' if enabled else 'disabled'} via console")
+    return jsonify(output=f"Device '{name}' {'enabled' if enabled else 'disabled'}",
+                   enabled=enabled)
+
+
+@app.route("/devices/<name>/remove", methods=["POST"])
+def devices_remove(name: str):
+    name = _safe_dev_name(name)
+    with _dev_lock:
+        state = _load_dev_state()
+        extra = state.get("extra") or {}
+        if name not in extra:
+            return jsonify(error=f"'{name}' is not a runtime-added device "
+                                 "(built-in devices can be disabled, not removed)"), 400
+        extra.pop(name, None)
+        state["extra"] = extra
+        state["disabled"] = [d for d in state.get("disabled", []) if d != name]
+        _save_dev_state(state)
+    _log(f"Device '{name}' removed via console")
+    return jsonify(output=f"Device '{name}' removed")
+
+
+@app.route("/devices/<name>/connect", methods=["POST"])
+def devices_connect(name: str):
+    """Probe a device on demand (the 'connect' button in the console)."""
+    name = _safe_dev_name(name)
+    if name == "esp32":
+        up, endpoint = _esp32_reachable()
+        return jsonify(name=name, up=up, ip=endpoint,
+                       output=f"ESP32 ({_esp32_transport()}): "
+                              f"{'reachable' if up else 'unreachable'} at {endpoint}")
+    info = _device_cfg(name)
+    if info is None:
+        return jsonify(error=f"unknown device '{name}'"), 404
+    up = _device_probe(info)
+    return jsonify(name=name, up=up, ip=info.get("ip", ""),
+                   output=f"{_DEVICE_LABELS.get(name, name)}: "
+                          f"{'reachable' if up else 'unreachable'} at {info.get('ip','')}")
 
 
 @app.route("/processes")
@@ -2805,7 +3126,12 @@ def _omg_deploy(payload_name: str) -> str:
     path = PAYLOADS / payload_name
     if not path.exists():
         return f"[ERR] Payload not found: {path}"
-    url = f"http://{DEVICES['omgplug']['ip']}/api/payload"
+    omg = _device_cfg("omgplug")
+    if omg is None:
+        return "[ERR] OMG Plug not configured — add it in the Device Manager"
+    if not _device_enabled("omgplug"):
+        return "[ERR] OMG Plug is disabled — enable it in the Device Manager"
+    url = f"http://{omg['ip']}/api/payload"
     try:
         r = _req.post(url, json={"payload": path.read_text()}, timeout=10)
         return r.text or "Deployed"
@@ -3090,10 +3416,20 @@ def flipper_subghz():
     return jsonify(output=out)
 
 # ---------------------------------------------------------------------------
-# Routes — ESP32 board serial bridge (ESP32 Marauder / serial-CLI firmware)
+# Routes — ESP32 board bridge (ESP32 Marauder / serial-CLI / networked firmware)
+#
+# Transport is selected by config.json → esp32.transport:
+#   "serial"  USB serial CLI            (default; serial_port + baud)
+#   "tcp"     raw TCP command socket    (host + port; telnet-style line CLI)
+#   "http"    HTTP command endpoint     (host + port + http_path + http_method)
+# Network transports let the board ride the WiFi instead of a USB tether.
 # ---------------------------------------------------------------------------
 
-def _esp32_cmd(cmd: str, read_timeout: float = 6.0) -> str:
+def _esp32_transport() -> str:
+    return (_ESP32_CFG.get("transport") or "serial").lower()
+
+
+def _esp32_serial_cmd(cmd: str, read_timeout: float) -> str:
     port = _ESP32_CFG.get("serial_port", "/dev/ttyUSB0")
     baud = int(_ESP32_CFG.get("baud", 115200))
     if not Path(port).exists():
@@ -3120,6 +3456,72 @@ def _esp32_cmd(cmd: str, read_timeout: float = 6.0) -> str:
         return f"[ERR] {e}"
 
 
+def _esp32_tcp_cmd(cmd: str, read_timeout: float) -> str:
+    host = _ESP32_CFG.get("host", "192.168.4.1")
+    port = int(_ESP32_CFG.get("port", 8080))
+    try:
+        with socket.create_connection((host, port), timeout=5) as s:
+            s.sendall(f"{cmd}\r\n".encode())
+            s.settimeout(0.5)
+            resp = b""
+            deadline = time.time() + read_timeout
+            while time.time() < deadline:
+                try:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    resp += chunk
+                except socket.timeout:
+                    if resp:
+                        break
+            return resp.decode(errors="replace").strip() or "(no output — command sent)"
+    except Exception as e:
+        return f"[ERR] {e}"
+
+
+def _esp32_http_cmd(cmd: str, read_timeout: float) -> str:
+    host   = _ESP32_CFG.get("host", "192.168.4.1")
+    port   = int(_ESP32_CFG.get("port", 80))
+    path   = _ESP32_CFG.get("http_path", "/cmd")
+    method = (_ESP32_CFG.get("http_method") or "GET").upper()
+    url    = f"http://{host}:{port}{path}"
+    try:
+        if method == "POST":
+            r = _req.post(url, data={"cmd": cmd}, json={"cmd": cmd},
+                          timeout=read_timeout)
+        else:
+            r = _req.get(url, params={"cmd": cmd}, timeout=read_timeout)
+        body = (r.text or "").strip()
+        return body or f"(HTTP {r.status_code} — command sent)"
+    except Exception as e:
+        return f"[ERR] {e}"
+
+
+def _esp32_cmd(cmd: str, read_timeout: float = 6.0) -> str:
+    transport = _esp32_transport()
+    if transport == "tcp":
+        return _esp32_tcp_cmd(cmd, read_timeout)
+    if transport == "http":
+        return _esp32_http_cmd(cmd, read_timeout)
+    return _esp32_serial_cmd(cmd, read_timeout)
+
+
+def _esp32_reachable() -> tuple[bool, str]:
+    """Return (up, human-readable endpoint) for the configured transport."""
+    transport = _esp32_transport()
+    if transport in ("tcp", "http"):
+        host = _ESP32_CFG.get("host", "192.168.4.1")
+        port = int(_ESP32_CFG.get("port", 8080 if transport == "tcp" else 80))
+        endpoint = f"{host}:{port}"
+        try:
+            socket.create_connection((host, port), timeout=2).close()
+            return True, endpoint
+        except Exception:
+            return False, endpoint
+    port = _ESP32_CFG.get("serial_port", "/dev/ttyUSB0")
+    return Path(port).exists(), port
+
+
 # ESP32 Marauder serial CLI command map. Override per-firmware in code if needed.
 _ESP32_CMDS = {
     "scan_ap":   "scanap",
@@ -3144,12 +3546,13 @@ _ESP32_LONG = {"scan_ap", "scan_sta", "sniff", "ble_scan", "wardrive",
 
 @app.route("/esp32/status")
 def esp32_status():
-    port = _ESP32_CFG.get("serial_port", "/dev/ttyUSB0")
-    up   = Path(port).exists()
-    return jsonify(port=port, up=up,
+    transport   = _esp32_transport()
+    up, endpoint = _esp32_reachable()
+    return jsonify(transport=transport, endpoint=endpoint, up=up,
                    baud=int(_ESP32_CFG.get("baud", 115200)),
                    firmware=_ESP32_CFG.get("firmware", "marauder"),
-                   output=f"ESP32 board: {'connected' if up else 'not found'} at {port}")
+                   output=f"ESP32 board ({transport}): "
+                          f"{'connected' if up else 'not found'} at {endpoint}")
 
 
 @app.route("/esp32/cmd", methods=["POST"])
@@ -3433,8 +3836,12 @@ def portal_deploy():
     if html is None:
         return jsonify(error=f"Template '{ptype}' not found"), 404
     # Deploy to Pineapple via SSH
+    d = _device_cfg("pineapple")
+    if d is None:
+        return jsonify(error="Pineapple not configured — add it in the Device Manager"), 400
+    if not _device_enabled("pineapple"):
+        return jsonify(error="Pineapple is disabled — enable it in the Device Manager"), 400
     try:
-        d = DEVICES["pineapple"]
         c = paramiko.SSHClient()
         c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         c.connect(d["ip"], username=d["user"], password=d["pass"], timeout=15)
